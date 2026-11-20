@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "X4Data", "X4Data\X4Data.csproj", "{11249B21-D305-4929-A3A9-FEFF28E85678}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "X4Data.Tests", "tests\X4Data.Tests.csproj", "{FEFDD084-EFE6-4D15-833A-C05D6E376413}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GalaxyEditor3D", "editor\GalaxyEditor3D.csproj", "{4CC1D503-AC46-4337-9349-0227B7AF60DA}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{11249B21-D305-4929-A3A9-FEFF28E85678}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{11249B21-D305-4929-A3A9-FEFF28E85678}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{11249B21-D305-4929-A3A9-FEFF28E85678}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{11249B21-D305-4929-A3A9-FEFF28E85678}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FEFDD084-EFE6-4D15-833A-C05D6E376413}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FEFDD084-EFE6-4D15-833A-C05D6E376413}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FEFDD084-EFE6-4D15-833A-C05D6E376413}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FEFDD084-EFE6-4D15-833A-C05D6E376413}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4CC1D503-AC46-4337-9349-0227B7AF60DA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4CC1D503-AC46-4337-9349-0227B7AF60DA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4CC1D503-AC46-4337-9349-0227B7AF60DA}.Release|Any CPU.ActiveCfg = Debug|Any CPU
+		{4CC1D503-AC46-4337-9349-0227B7AF60DA}.Release|Any CPU.Build.0 = Debug|Any CPU
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,7 @@
+bin/
+obj/
+.godot/
+.vs/
+*.user
+# converted game assets must never be committed (release rule)
+cache/

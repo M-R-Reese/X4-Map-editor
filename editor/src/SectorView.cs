@@ -1,0 +1,411 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Godot;
+using X4Data.Galaxy;
+
+namespace GalaxyEditor3D;
+
+/// <summary>
+/// 3D view of one sector: ecliptic (y = 0 plane: rings every 50 km, north / east axes), gates with their real model,
+/// decorations (fields drawn as their volume with sample rocks / gas, objects with their real model), a marker label
+/// on each that stays readable from far away, and a height line down to its foot point on the ecliptic.
+/// Space: X4 (x, y, z) -> Godot (x, y, -z), see X4ToGodot.
+/// Two layers: behind, the cluster's BACKDROP (sky, nebulae, planets, 100,000+ km away) in its own world whose camera
+/// only copies the turn of the front camera (a sky does not move when you fly); in front, the sector with a
+/// transparent background. Both use the backdrop's sun direction.
+/// Mouse: click a marker = select; drag a marker = move it along its height plane; Shift + drag = move it up / down.
+/// </summary>
+public partial class SectorView : Control
+{
+    readonly App _app;
+    SubViewport _vp = null!, _bgVp = null!;
+    Camera3D _bgCam = null!;
+    DirectionalLight3D _bgSun = null!, _sun = null!;
+    Node3D _bgContent = null!, _content = null!;
+    OrbitCamera _cam = null!;
+    Minimap _minimap = null!;
+    DecorVisuals _visuals = null!;
+    string? _shownBackdrop;
+    readonly Dictionary<string, Node3D?> _backdrops = new();  // backdrop component -> template
+    readonly Dictionary<string, Node3D?> _models = new();     // gate macro -> template built once from the game files
+
+    /// <summary>One movable thing on screen: a gate or a decoration, all its nodes under one holder.</summary>
+    sealed record Item(string Kind, int Id, Node3D Holder, Color Colour);
+    readonly List<Item> _items = new();
+    int? _shownSector;
+    public double Reach { get; private set; } = 200_000;
+    /// <summary>Camera pitch / yaw (radians) when a sector opens.</summary>
+    public (float pitch, float yaw) StartView = (-0.75f, 0.5f);
+
+    // dragging
+    Item? _drag; Vector3 _dragGrab; bool _dragMoved; Vector2 _dragStart;
+
+    public SectorView(App app)
+    {
+        _app = app;
+        app.Changed += () => { if (Visible && app.OpenSectorId != null) ShowSector(); };
+    }
+
+    public OrbitCamera Camera => _cam;
+
+    public override void _Ready()
+    {
+        // back layer: the backdrop (input goes to the front layer only)
+        var bgBox = new SubViewportContainer { Stretch = true, MouseFilter = MouseFilterEnum.Ignore };
+        bgBox.SetAnchorsPreset(LayoutPreset.FullRect); AddChild(bgBox);
+        _bgVp = new SubViewport { OwnWorld3D = true, Msaa3D = Viewport.Msaa.Msaa2X };
+        bgBox.AddChild(_bgVp);
+        _bgVp.AddChild(new WorldEnvironment { Environment = new Godot.Environment
+        {
+            BackgroundMode = Godot.Environment.BGMode.Color, BackgroundColor = new Color(0.012f, 0.016f, 0.03f),
+            AmbientLightSource = Godot.Environment.AmbientSource.Color, AmbientLightColor = new Color(0.3f, 0.35f, 0.5f), AmbientLightEnergy = 0.08f,
+            TonemapMode = Godot.Environment.ToneMapper.Filmic, GlowEnabled = true,
+        } });
+        _bgSun = new DirectionalLight3D(); _bgVp.AddChild(_bgSun);
+        _bgCam = new Camera3D { Near = 50_000, Far = 4_000_000_000, Fov = 60 }; _bgVp.AddChild(_bgCam);
+        _bgContent = new Node3D(); _bgVp.AddChild(_bgContent);
+
+        // front layer: the sector, transparent where nothing is drawn
+        var box = new SubViewportContainer { Stretch = true };
+        box.SetAnchorsPreset(LayoutPreset.FullRect); AddChild(box);
+        _vp = new SubViewport { OwnWorld3D = true, Msaa3D = Viewport.Msaa.Msaa2X, HandleInputLocally = true, TransparentBg = true };
+        box.AddChild(_vp);
+        _vp.AddChild(new WorldEnvironment { Environment = new Godot.Environment
+        {
+            BackgroundMode = Godot.Environment.BGMode.ClearColor,
+            AmbientLightSource = Godot.Environment.AmbientSource.Color, AmbientLightColor = new Color(0.55f, 0.6f, 0.7f), AmbientLightEnergy = 0.15f,
+            TonemapMode = Godot.Environment.ToneMapper.Filmic,
+        } });
+        _sun = new DirectionalLight3D { RotationDegrees = new Vector3(-35, 40, 0) };
+        _vp.AddChild(_sun);
+        _cam = new OrbitCamera();
+        _cam.LeftPressed += OnLeftPressed;
+        _cam.LeftDragged += OnLeftDragged;
+        _cam.LeftReleased += OnLeftReleased;
+        _cam.RightClicked += OnRightClicked;
+        // no flying while a text / number field has the keyboard (typing "w" into a name must not move the camera)
+        _cam.KeysAllowed = () => IsVisibleInTree() && GetTree().Root.GuiGetFocusOwner() is not (LineEdit or TextEdit);
+        _vp.AddChild(_cam);
+        _content = new Node3D(); _vp.AddChild(_content);
+        _visuals = new DecorVisuals(_app);
+
+        _minimap = new Minimap(_app, this);
+        AddChild(_minimap);
+    }
+
+    /// <summary>Camera target in X4 space (where "Add" puts new things), on the ecliptic.</summary>
+    public (double X, double Y, double Z) ViewCentre() => (Math.Round(_cam.Target.X), 0, Math.Round(-_cam.Target.Z));
+
+    /// <summary>Moves the camera target to an X4 position (minimap clicks).</summary>
+    public void LookAtX4(double x, double z) { _cam.Target = new Vector3((float)x, _cam.Target.Y, (float)-z); _cam.Refresh(); }
+
+    /// <summary>Rebuilds the scene of the open sector. Keeps the camera when the same sector is shown again.</summary>
+    public void ShowSector()
+    {
+        if (_content == null) return;
+        var s = _app.P.SectorById(_app.OpenSectorId);
+        if (s == null) return;
+        foreach (var c in _content.GetChildren()) { _content.RemoveChild(c); c.QueueFree(); }
+        _items.Clear();
+        _sun.LightEnergy = (float)Math.Clamp(s.Sunlight, 0.15, 3.0);
+        // the sky camera stands where the sector sits inside the backdrop (X4 -> Godot: z mirrored)
+        var place = _app.P.Place(s);
+        _bgCam.Position = new Vector3((float)place.X, (float)place.Y, (float)-place.Z);
+        ShowBackdrop(_app.P.ClusterOf(s.Id)!.BackdropComponent(), place);
+
+        Reach = Math.Max(200_000, s.Gates.Select(g => Math.Sqrt(g.X * g.X + g.Z * g.Z))
+            .Concat(s.Decor.Select(d => Math.Sqrt(d.X * d.X + d.Z * d.Z))).DefaultIfEmpty(0).Max() + 50_000);
+        Ecliptic(Reach);
+
+        foreach (var g in s.Gates)
+        {
+            bool sel = _app.Sel is { Kind: "gate" } x && x.Id == g.Id;
+            var target = g.Link != null ? _app.P.SectorOfGate(g.Link.Value)?.Name : null;
+            var colour = sel ? new Color("ffe066") : target != null ? new Color("cfe3ff") : new Color("ffb347");
+            var model = GateModel(g.Type);
+            model.Basis = new Basis(Vector3.Up, -Mathf.DegToRad((float)g.Yaw));      // yaw 0 = looks north (+z in X4)
+            AddItem("gate", g.Id, g.X, g.Y, g.Z, model, g.Type == "accelerator" ? "◇" : "◯", target != null ? "→ " + target : "not connected", colour);
+        }
+
+        foreach (var d in s.Decor)
+        {
+            bool sel = _app.Sel is { Kind: "decor" } x && x.Id == d.Id;
+            var (node, icon, label, colour) = _visuals.Build(d);
+            node.Basis = DecorVisuals.Rotation(d);
+            AddItem("decor", d.Id, d.X, d.Y, d.Z, node, icon, label, sel ? new Color("ffe066") : colour);
+        }
+
+        if (_shownSector != s.Id)
+        {
+            _cam.SetView(StartView.pitch, StartView.yaw);
+            _cam.Frame(new Aabb(new Vector3((float)-Reach, -20_000, (float)-Reach), new Vector3((float)Reach * 2, 40_000, (float)Reach * 2)), 0.62f);
+            _shownSector = s.Id;
+        }
+    }
+
+    /// <summary>Holder at the X4 position with the model / volume, the marker labels and the height line.</summary>
+    void AddItem(string kind, int id, double x, double y, double z, Node3D body, string icon, string label, Color colour)
+    {
+        var holder = new Node3D { Position = new Vector3((float)x, (float)y, (float)-z) };
+        holder.AddChild(body);
+        holder.AddChild(Marker(icon, colour, 30, HorizontalAlignment.Center, Vector2.Zero));
+        holder.AddChild(Marker(label, colour, 24, HorizontalAlignment.Left, new Vector2(26, 0)));
+        var line = new MeshInstance3D { Name = "HeightLine", CastShadow = GeometryInstance3D.ShadowCastingSetting.Off };
+        holder.AddChild(line);
+        UpdateHeightLine(holder, colour);
+        _content.AddChild(holder);
+        _items.Add(new Item(kind, id, holder, colour));
+    }
+
+    /// <summary>The front camera's turn goes to the sky camera every frame (position stays where the sector sits in the backdrop).</summary>
+    public override void _Process(double delta)
+    {
+        if (!Visible || _bgCam == null) return;
+        _bgCam.GlobalBasis = _cam.GlobalBasis;
+        _bgCam.Fov = _cam.Fov;
+    }
+
+    // ---------------------------------------------------------------------------------------------- select and drag
+    Item? PickAt(Vector2 screen) =>
+        _items.Where(i => !_cam.IsPositionBehind(i.Holder.Position))
+              .Select(i => (i, d: _cam.UnprojectPosition(i.Holder.Position).DistanceTo(screen)))
+              .Where(x => x.d < 24).OrderBy(x => x.d).Select(x => x.i).FirstOrDefault();
+
+    void OnLeftPressed(Vector2 screen)
+    {
+        _drag = PickAt(screen); _dragMoved = false; _dragStart = screen;
+        if (_drag != null && PlaneHit(screen, _drag.Holder.Position.Y) is { } hit) _dragGrab = _drag.Holder.Position - hit;
+    }
+
+    void OnLeftDragged(Vector2 screen, Vector2 relative, bool shift)
+    {
+        if (_drag == null) return;
+        if (!_dragMoved && screen.DistanceTo(_dragStart) < 5) return;
+        _dragMoved = true;
+        var p = _drag.Holder.Position;
+        if (shift)
+        {
+            // up / down: screen pixels -> metres at the object's distance
+            float k = _cam.Position.DistanceTo(p) * 0.0015f;
+            p.Y -= relative.Y * k;
+            if (PlaneHit(screen, p.Y) is { } hit) _dragGrab = p - hit;      // keep the grip for the next flat move
+        }
+        else if (PlaneHit(screen, p.Y) is { } hit)
+        {
+            var n = hit + _dragGrab;
+            if (!Input.IsKeyPressed(Key.Alt)) { n.X = Mathf.Round(n.X / 1000) * 1000; n.Z = Mathf.Round(n.Z / 1000) * 1000; }   // 1 km grid, Alt = free
+            p.X = n.X; p.Z = n.Z;
+        }
+        _drag.Holder.Position = p;
+        UpdateHeightLine(_drag.Holder, _drag.Colour);
+        _app.SetStatus($"x {p.X / 1000:F1} km   height {p.Y / 1000:F1} km   z {-p.Z / 1000:F1} km      (Shift: up / down, Alt: no 1 km grid)");
+    }
+
+    void OnLeftReleased(Vector2 screen)
+    {
+        var d = _drag; _drag = null;
+        if (d == null)
+        {
+            if (screen.DistanceTo(_dragStart) < 5) { _app.Sel = null; _app.Refresh(); }   // click into empty space: deselect
+            return;
+        }
+        if (!_dragMoved) { _app.Sel = new Selection(d.Kind, d.Id); _app.Refresh(); return; }
+        var p = d.Holder.Position;
+        double x = Math.Round(p.X), y = Math.Round(p.Y), z = Math.Round(-p.Z);
+        _app.Sel = new Selection(d.Kind, d.Id);
+        _app.Change(() =>
+        {
+            if (d.Kind == "gate" && _app.P.GateById(d.Id) is { } g) { g.X = x; g.Y = y; g.Z = z; }
+            if (d.Kind == "decor" && _app.P.DecorById(d.Id) is { } o) { o.X = x; o.Y = y; o.Z = z; }
+        });
+    }
+
+    /// <summary>
+    /// Right-click menu: on a gate / decoration Copy, Cut, Delete, and for gates "Connect to" a
+    /// sector (new partner gate there, opposite side) or "Disconnect"; on empty space Paste at the clicked spot.
+    /// </summary>
+    void OnRightClicked(Vector2 screen)
+    {
+        var item = PickAt(screen);
+        var at = PlaneHit(screen, 0);                                 // the clicked spot on the ecliptic (Godot space)
+        var menu = new PopupMenu();
+        var actions = new List<Action>();
+        void Add(string text, Action a, bool enabled = true) { menu.AddItem(text, actions.Count); menu.SetItemDisabled(menu.ItemCount - 1, !enabled); actions.Add(a); }
+
+        if (item != null)
+        {
+            _app.Sel = new Selection(item.Kind, item.Id); _app.Refresh();
+            Add("Copy  (Ctrl+C)", _app.Copy);
+            Add("Cut  (Ctrl+X)", _app.Cut);
+            Add("Delete  (Del)", _app.DeleteSelection);
+            // gates and anomalies: connect to another sector (a new partner is created there, opposite side) or disconnect
+            var gate = item.Kind == "gate" ? _app.P.GateById(item.Id) : null;
+            var anomaly = item.Kind == "decor" && _app.P.DecorById(item.Id) is { } dd && _app.Decor?.Get(dd.Kind, dd.Ref)?.Category == "Anomaly" ? dd : null;
+            if (gate != null || anomaly != null)
+            {
+                menu.AddSeparator();
+                var sub = new PopupMenu { Name = "connect" };
+                var here = gate != null ? _app.P.SectorOfGate(gate.Id)! : _app.P.SectorOfDecor(anomaly!.Id)!;
+                // anomalies may also lead somewhere else in the same sector
+                var targets = _app.P.AllSectors().Where(x => anomaly != null || x.Id != here.Id).OrderBy(x => x.Name).ToList();
+                for (int i = 0; i < targets.Count; i++) sub.AddItem(targets[i].Name + (targets[i].Id == here.Id ? " (this sector)" : ""), i);
+                sub.IdPressed += i =>
+                {
+                    var t = targets[(int)i];
+                    _app.Change(() =>
+                    {
+                        if (gate != null) { var g2 = _app.P.AddGate(t, -gate.X, -gate.Z); g2.Type = gate.Type; _app.P.Link(gate, g2); }
+                        else
+                        {
+                            var a2 = _app.P.AddDecor(t, anomaly!.Kind, anomaly.Ref, -anomaly.X, anomaly.Y, -anomaly.Z);
+                            _app.P.LinkDecor(anomaly, a2);
+                        }
+                    });
+                };
+                menu.AddChild(sub);
+                menu.AddSubmenuNodeItem("Connect to (new partner there)", sub);
+                if ((gate?.Link ?? anomaly?.Link) != null)
+                    Add("Disconnect", () => _app.Change(() => { if (gate != null) _app.P.Unlink(gate); else _app.P.UnlinkDecor(anomaly!); }));
+            }
+        }
+        else
+        {
+            Add("Paste here  (Ctrl+V)", () => { if (at is { } p) _app.Paste(Math.Round(p.X), Math.Round(-p.Z)); }, _app.CanPaste && at != null);
+        }
+        menu.IdPressed += id => actions[(int)id]();
+        menu.PopupHide += () => { _app.WindowClosed(menu); menu.QueueFree(); };
+        AddChild(menu);
+        menu.Position = (Vector2I)(GetScreenPosition() + screen);
+        menu.Popup();
+        _app.OpenWindow(menu, menu.Hide);                            // Esc closes it like every window
+    }
+
+    /// <summary>Where the mouse ray meets the horizontal plane at height y (Godot space), or null.</summary>
+    Vector3? PlaneHit(Vector2 screen, float y)
+    {
+        var o = _cam.ProjectRayOrigin(screen); var dir = _cam.ProjectRayNormal(screen);
+        if (Math.Abs(dir.Y) < 1e-4f) return null;
+        float t = (y - o.Y) / dir.Y;
+        return t > 0 ? o + dir * t : null;
+    }
+
+    /// <summary>Item positions for the minimap (X4 space x / z, colour, selected).</summary>
+    public IEnumerable<(string kind, int id, float x, float z, Color colour)> MapItems() =>
+        _items.Select(i => (i.Kind, i.Id, i.Holder.Position.X, -i.Holder.Position.Z, i.Colour));
+
+    // ---------------------------------------------------------------------------------------------- backdrop
+    /// <summary>Loads (once) and shows a backdrop component; turns both suns towards its sun as seen from the sector.</summary>
+    void ShowBackdrop(string name, (double X, double Y, double Z) place)
+    {
+        if (_app.Conv == null || _app.Game == null) return;
+        SunFrom(name, place);
+        if (name == _shownBackdrop) return;
+        foreach (var c in _bgContent.GetChildren()) { _bgContent.RemoveChild(c); c.QueueFree(); }
+        _shownBackdrop = name;
+        if (!_backdrops.TryGetValue(name, out var tpl))
+        {
+            tpl = _app.Conv.BuildObject(name);
+            if (tpl.GetChildCount() == 0) { tpl.Free(); tpl = null; }
+            _backdrops[name] = tpl;
+        }
+        if (tpl != null) _bgContent.AddChild(tpl.Duplicate());
+    }
+
+    void SunFrom(string name, (double X, double Y, double Z) place)
+    {
+        var light = X4Data.Space.Backdrops.Light(_app.Game!, name);
+        if (light == null) return;
+        // light shines FROM the sun: direction from the sector's place to the sun light
+        var d = new System.Numerics.Vector3(light.SunPosition.X - (float)place.X, light.SunPosition.Y - (float)place.Y, light.SunPosition.Z - (float)place.Z);
+        var toSun = new Vector3(d.X, d.Y, -d.Z).Normalized();
+        var up = Math.Abs(toSun.Y) > 0.95f ? Vector3.Forward : Vector3.Up;
+        foreach (var sun in new[] { _sun, _bgSun })
+        {
+            sun.Basis = Basis.LookingAt(-toSun, up);
+            sun.LightColor = new Color(light.SunColour.X, light.SunColour.Y, light.SunColour.Z);
+        }
+        _bgSun.LightEnergy = light.SunIntensity;
+    }
+
+    // ---------------------------------------------------------------------------------------------- pieces
+    static Label3D Marker(string text, Color col, int size, HorizontalAlignment align, Vector2 offset) => new()
+    {
+        Text = text, Billboard = BaseMaterial3D.BillboardModeEnum.Enabled, FixedSize = true, PixelSize = 0.0009f,
+        FontSize = size, OutlineSize = 6, NoDepthTest = true, Modulate = col, HorizontalAlignment = align, Offset = offset,
+    };
+
+    /// <summary>The model templates are not in the scene tree: free them when the view goes.</summary>
+    public override void _ExitTree()
+    {
+        foreach (var t in _models.Values.Concat(_backdrops.Values)) t?.Free();
+        _models.Clear(); _backdrops.Clear();
+        _visuals.Free();
+    }
+
+    Node3D GateModel(string type)
+    {
+        string macro = type == "accelerator" ? "props_gates_orb_accelerator_01_macro" : "props_gates_anc_gate_macro";
+        if (!_models.TryGetValue(macro, out var tpl) && _app.Conv != null)
+        {
+            tpl = _app.Conv.BuildObject(macro);
+            if (tpl.GetChildCount() == 0) { tpl.Free(); tpl = null; }
+            _models[macro] = tpl;
+        }
+        if (tpl != null) return (Node3D)tpl.Duplicate();
+        // no game files (yet): a plain ring of the gate's size, standing upright
+        var ring = new MeshInstance3D { Mesh = new TorusMesh { InnerRadius = 1700, OuterRadius = 2000, Rings = 48, RingSegments = 8 } };
+        ring.RotationDegrees = new Vector3(90, 0, 0);
+        var holder = new Node3D(); holder.AddChild(ring);
+        return holder;
+    }
+
+    /// <summary>The y = 0 plane: rings every 50 km (brighter every 100 km, labelled), north / east axes.</summary>
+    void Ecliptic(double reach)
+    {
+        var im = new ImmediateMesh();
+        var mat = new StandardMaterial3D { ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded, VertexColorUseAsAlbedo = true, Transparency = BaseMaterial3D.TransparencyEnum.Alpha };
+        im.SurfaceBegin(Mesh.PrimitiveType.Lines, mat);
+        for (int km = 50; km * 1000 <= reach; km += 50)
+        {
+            var col = km % 100 == 0 ? new Color(0.35f, 0.45f, 0.6f, 0.55f) : new Color(0.25f, 0.32f, 0.42f, 0.35f);
+            float r = km * 1000;
+            for (int i = 0; i < 128; i++)
+            {
+                float a0 = MathF.Tau * i / 128, a1 = MathF.Tau * (i + 1) / 128;
+                im.SurfaceSetColor(col); im.SurfaceAddVertex(new Vector3(r * MathF.Sin(a0), 0, -r * MathF.Cos(a0)));
+                im.SurfaceSetColor(col); im.SurfaceAddVertex(new Vector3(r * MathF.Sin(a1), 0, -r * MathF.Cos(a1)));
+            }
+            if (km % 100 == 0)
+                _content.AddChild(new Label3D { Text = km + " km", Position = new Vector3(0, 0, -r), Billboard = BaseMaterial3D.BillboardModeEnum.Enabled,
+                    FixedSize = true, PixelSize = 0.0007f, FontSize = 22, Modulate = new Color(0.45f, 0.55f, 0.7f) });
+        }
+        float R = (float)reach;
+        var axis = new Color(0.35f, 0.45f, 0.6f, 0.5f);
+        foreach (var (a, b) in new[] { (new Vector3(-R, 0, 0), new Vector3(R, 0, 0)), (new Vector3(0, 0, R), new Vector3(0, 0, -R)) })
+        { im.SurfaceSetColor(axis); im.SurfaceAddVertex(a); im.SurfaceSetColor(axis); im.SurfaceAddVertex(b); }
+        im.SurfaceEnd();
+        _content.AddChild(new MeshInstance3D { Mesh = im, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off });
+        foreach (var (t, p) in new[] { ("N", new Vector3(0, 0, -R)), ("E", new Vector3(R, 0, 0)) })
+            _content.AddChild(new Label3D { Text = t, Position = p, Billboard = BaseMaterial3D.BillboardModeEnum.Enabled, FixedSize = true, PixelSize = 0.0009f, FontSize = 28, Modulate = new Color(0.6f, 0.75f, 1f) });
+    }
+
+    /// <summary>Line from the holder down (or up) to the ecliptic, with a small ring at the foot point (holder-local).</summary>
+    static void UpdateHeightLine(Node3D holder, Color col)
+    {
+        var line = holder.GetNode<MeshInstance3D>("HeightLine");
+        var im = new ImmediateMesh();
+        var mat = new StandardMaterial3D { ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded, AlbedoColor = new Color(col, 0.7f), Transparency = BaseMaterial3D.TransparencyEnum.Alpha };
+        im.SurfaceBegin(Mesh.PrimitiveType.Lines, mat);
+        var foot = new Vector3(0, -holder.Position.Y, 0);
+        if (Math.Abs(holder.Position.Y) > 1) { im.SurfaceAddVertex(Vector3.Zero); im.SurfaceAddVertex(foot); }
+        for (int i = 0; i < 32; i++)
+        {
+            float a0 = MathF.Tau * i / 32, a1 = MathF.Tau * (i + 1) / 32, r = 3000;
+            im.SurfaceAddVertex(foot + new Vector3(r * MathF.Cos(a0), 0, r * MathF.Sin(a0)));
+            im.SurfaceAddVertex(foot + new Vector3(r * MathF.Cos(a1), 0, r * MathF.Sin(a1)));
+        }
+        im.SurfaceEnd();
+        line.Mesh = im;
+    }
+}

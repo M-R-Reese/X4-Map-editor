@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- X4 game data access (archives, extensions, index, models). No Godot dependency, so the console tests can use it. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>X4Data</RootNamespace>
+    <Authors>M.R. Reese</Authors>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,13 @@
+<Project Sdk="Godot.NET.Sdk/4.7.2">
+  <!-- Godot app of the 3D Galaxy Editor. The X4 data layer is the separate X4Data library (tested without Godot). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
+    <RootNamespace>GalaxyEditor3D</RootNamespace>
+    <Authors>M.R. Reese</Authors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\X4Data\X4Data.csproj" />
+  </ItemGroup>
+</Project>
