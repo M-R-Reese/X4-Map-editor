@@ -6,7 +6,9 @@ Author: M.R. Reese. Work in progress. Licence: MIT (see `LICENSE`).
 
 ## Try the beta (no installation)
 
-1. Download `X4MapEditor-0.1-beta-windows.zip` from the [Releases](https://github.com/M-R-Reese/X4-Map-editor/releases) page.
+**[Pre-release 0.1 beta](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.1-beta)** · [direct download (zip, 69 MB)](https://github.com/M-R-Reese/X4-Map-editor/releases/download/v0.1-beta/X4MapEditor-0.1-beta-windows.zip)
+
+1. Download `X4MapEditor-0.1-beta-windows.zip` from the [pre-release page](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.1-beta).
 2. Unpack it anywhere and start `X4MapEditor.exe`. Nothing else is needed: .NET comes with it.
 3. On the first start, check the folders the editor guessed (your X4 game folder, your profile folder) and click **Start**.
 
