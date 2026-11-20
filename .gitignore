@@ -5,3 +5,5 @@ obj/
 *.user
 # converted game assets must never be committed (release rule)
 cache/
+# exported program (Godot export), not source
+build/

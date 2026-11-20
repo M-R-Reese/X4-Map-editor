@@ -19,6 +19,9 @@ public record Selection(string Kind, int Id);
 /// </summary>
 public partial class App : Control
 {
+    /// <summary>Visible name and version (window title, dialogs). The Godot project name stays "X4 Galaxy Editor 3D"
+    /// on purpose: it names the user data folder (settings, autosave).</summary>
+    public const string AppName = "X4 Map Editor", Version = "0.1 beta";
     public Project P = new();
     public Selection? Sel;
     public int? OpenSectorId;                       // null = galaxy view
@@ -78,7 +81,7 @@ public partial class App : Control
 
         var top = new PanelContainer(); col.AddChild(top);
         var bar = new HBoxContainer(); bar.AddThemeConstantOverride("separation", 6); top.AddChild(bar);
-        bar.AddChild(new Label { Text = "X4 Galaxy Editor 3D " });
+        bar.AddChild(new Label { Text = $"{AppName} {Version} " });
         Btn(bar, "New", NewProject); Btn(bar, "Open...", OpenDialog); Btn(bar, "Save project", () => Save(false)); Btn(bar, "Save as...", () => Save(true));
         bar.AddChild(new VSeparator());
         Btn(bar, "Undo", Undo, "Ctrl+Z"); Btn(bar, "Redo", Redo, "Ctrl+Y");
@@ -155,7 +158,7 @@ public partial class App : Control
         _back.Visible = inSector;
         var s = P.SectorById(OpenSectorId);
         _crumb.Text = s != null ? P.ClusterOf(s.Id)!.Name + " / " + s.Name : "";
-        GetWindow().Title = (_dirty ? "* " : "") + P.ModName + " - X4 Galaxy Editor 3D" + (_file != null ? " - " + Path.GetFileName(_file) : "");
+        GetWindow().Title = (_dirty ? "* " : "") + P.ModName + $" - {AppName} {Version}" + (_file != null ? " - " + Path.GetFileName(_file) : "");
         SetStatus((inSector
             ? "SECTOR:  WASD: fly  Q/E: down/up  Shift: faster  Right drag: turn  Middle drag: move  Wheel: zoom  F: frame  Click: select  Drag: move (Shift: height)  Right-click: menu  R: turn  Ctrl+C/X/V  Esc: galaxy"
             : Tool == "connect" ? "GALAXY:  drag from one sector to another to create a pair of connected gates.   Esc: back to Select"
@@ -207,7 +210,7 @@ public partial class App : Control
         AddChild(d); d.PopupCentered();
     }
 
-    void Alert(string text) { var d = new AcceptDialog { DialogText = text, Title = "X4 Galaxy Editor 3D" }; d.Confirmed += d.QueueFree; AddChild(d); d.PopupCentered(); }
+    void Alert(string text) { var d = new AcceptDialog { DialogText = text, Title = AppName }; d.Confirmed += d.QueueFree; AddChild(d); d.PopupCentered(); }
 
     // ---------------------------------------------------------------------------------------------- files
     void NewProject()

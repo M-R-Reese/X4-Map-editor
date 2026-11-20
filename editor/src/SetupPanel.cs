@@ -28,7 +28,7 @@ public partial class SetupPanel : PanelContainer
         var box = new VBoxContainer();
         box.AddThemeConstantOverride("separation", 10);
         AddChild(box);
-        box.AddChild(new Label { Text = "X4 Galaxy Editor 3D: folders", ThemeTypeVariation = "HeaderLarge" });
+        box.AddChild(new Label { Text = $"{App.AppName}: folders", ThemeTypeVariation = "HeaderLarge" });
         box.AddChild(new Label { Text = "The editor reads the models straight from your installed game. Nothing is copied or shipped.", AutowrapMode = TextServer.AutowrapMode.WordSmart });
         _game = Row(box, "Game folder (required)", _s.GameFolder, "folder with X4.exe and 01.cat");
         _profile = Row(box, "Profile folder (optional)", _s.ProfileFolder, "Documents\\Egosoft\\X4\\<number>: says which mods are on");

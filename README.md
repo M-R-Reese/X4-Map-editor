@@ -2,7 +2,16 @@
 
 A map editor for **X4: Foundations** that builds custom galaxies: lay out clusters and sectors on a hex map, then decorate each sector in 3D with the game's real gates, backdrops, asteroid fields, nebulae, wrecks and landmarks.
 
-Author: M.R. Reese. Work in progress.
+Author: M.R. Reese. Work in progress. Licence: MIT (see `LICENSE`).
+
+## Try the beta (no installation)
+
+1. Download `X4MapEditor-0.1-beta-windows.zip` from the [Releases](https://github.com/M-R-Reese/X4-Map-editor/releases) page.
+2. Unpack it anywhere and start `X4MapEditor.exe`. Nothing else is needed: .NET comes with it.
+3. On the first start, check the folders the editor guessed (your X4 game folder, your profile folder) and click **Start**.
+
+You need X4: Foundations installed (Windows, Steam). The beta has no mod export yet: it is for looking around,
+building a galaxy and decorating sectors. Feedback is welcome in the Issues.
 
 ## What it does
 
@@ -30,7 +39,7 @@ Anything that comes from another author's mod is marked with ⚠ in the dropdown
 - [Godot 4.7 **.NET** edition](https://godotengine.org/download) (not the standard one)
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 
-## Start
+## Start from the source
 
 1. Open `Start_3D_Editor.bat` in a text editor and set `GODOT` to the path of your Godot .NET program file.
 2. Double-click `Start_3D_Editor.bat`. It builds the editor and starts it.
@@ -46,3 +55,13 @@ Project files (`*.galaxy.json`) are compatible with the older HTML galaxy editor
 | `editor/` | Godot project: galaxy map, side panel, 3D sector view, minimap, music player |
 | `tests/` | Checks of the data library against the installed game: `dotnet run --project tests` |
 | `probe/` | Developer tool that prints facts from the game data |
+
+## Build the exe
+
+With the Godot 4.7 .NET export templates installed (Godot: Editor > Manage Export Templates), from `editor/`:
+`Godot_v4.7.2-stable_mono_win64_console.exe --headless --path . --export-release "Windows Desktop"`.
+The program goes to `build/X4MapEditor/`.
+
+## Licence
+
+MIT, Copyright (c) 2026 M.R. Reese. X4: Foundations and its files belong to Egosoft; this editor contains none of them.
