@@ -15,7 +15,8 @@ public record Selection(string Kind, int Id);
 /// <summary>
 /// Main window: top bar, galaxy map (2D) or sector view (3D), side panel, status line.
 /// Holds the project, undo / redo, selection and the open file. Every edit goes through Change().
-/// Command line for checks (after "--"): --open file.json, --sector id, --setup, --view pitch,yaw, --play musicid, --screenshot file.png.
+/// Command line for checks (after "--"): --open file.json, --sector id, --select gate:id / decor:id, --flipnormals, --debugreport (with --screenshot), --debugwindow, --setup,
+/// --view pitch,yaw, --play musicid, --screenshot file.png.
 /// </summary>
 public partial class App : Control
 {
@@ -52,6 +53,8 @@ public partial class App : Control
     public override void _Ready()
     {
         SetAnchorsPreset(LayoutPreset.FullRect);
+        DebugLog.CatchUnhandled();
+        DebugLog.Add($"{AppName} {Version} started on {OS.GetName()} {OS.GetVersion()}");
         BuildUi();
         try { if (File.Exists(AutosaveFile)) P = Project.FromJson(File.ReadAllText(AutosaveFile)); } catch { /* broken autosave: start empty */ }
 
@@ -63,6 +66,9 @@ public partial class App : Control
         if (Arg("--view") is { } v && v.Split(',') is { Length: 2 } pv)                // screenshot checks: camera pitch,yaw in degrees
             _sector.StartView = (Mathf.DegToRad(float.Parse(pv[0], System.Globalization.CultureInfo.InvariantCulture)), Mathf.DegToRad(float.Parse(pv[1], System.Globalization.CultureInfo.InvariantCulture)));
         if (int.TryParse(Arg("--sector"), out var sid) && P.SectorById(sid) != null) OpenSector(sid);
+        if (Arg("--select") is { } sel && sel.Split(':') is { Length: 2 } ps && int.TryParse(ps[1], out var selId)) Sel = new Selection(ps[0], selId);   // screenshot check of the gizmo
+        if (Array.IndexOf(args, "--flipnormals") >= 0) X4Shaders.ToggleNormalGreen();
+        if (float.TryParse(Arg("--near"), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var near)) _sector.NearView = near;
         Refresh();
 
         var s = Settings.Load(SettingsFile);
@@ -71,6 +77,7 @@ public partial class App : Control
         else if (s.Problems().Count == 0 && (File.Exists(SettingsFile) || _screenshot != null)) StartGame(s);
         else ShowSetup(s);
         if (_screenshot != null) _shotFrames = 90;
+        if (Array.IndexOf(args, "--debugwindow") >= 0) CallDeferred(nameof(ShowDebug));   // screenshot check of the debug window
     }
 
     // ---------------------------------------------------------------------------------------------- layout
@@ -93,8 +100,8 @@ public partial class App : Control
         bar.AddChild(new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill });
         Btn(bar, "Project settings", () => { Sel = null; _side.ShowProjectSettings(); });
         Btn(bar, "Folders...", () => ShowSetup(Settings.Load(SettingsFile)));
-        var export = Btn(bar, "Export mod...", () => { });
-        export.Disabled = true; export.TooltipText = "Comes with milestone 5. Until then: open the same project file in the HTML editor and export there.";
+        Btn(bar, "Debug...", ShowDebug, "Look checks and a debug report (zip) to send with a bug report.");
+        Btn(bar, "Export mod...", ExportMod, "Writes the galaxy as a mod into the export folder (Folders...), subfolder = mod folder name (Project settings).");
 
         var main = new HBoxContainer { SizeFlagsVertical = SizeFlags.ExpandFill }; main.AddThemeConstantOverride("separation", 0); col.AddChild(main);
         var viewArea = new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill, ClipContents = true }; main.AddChild(viewArea);
@@ -160,7 +167,7 @@ public partial class App : Control
         _crumb.Text = s != null ? P.ClusterOf(s.Id)!.Name + " / " + s.Name : "";
         GetWindow().Title = (_dirty ? "* " : "") + P.ModName + $" - {AppName} {Version}" + (_file != null ? " - " + Path.GetFileName(_file) : "");
         SetStatus((inSector
-            ? "SECTOR:  WASD: fly  Q/E: down/up  Shift: faster  Right drag: turn  Middle drag: move  Wheel: zoom  F: frame  Click: select  Drag: move (Shift: height)  Right-click: menu  R: turn  Ctrl+C/X/V  Esc: galaxy"
+            ? "SECTOR:  WASD: fly  Q/E: down/up  Shift: faster  Right drag: turn  Middle drag: move  Wheel: zoom  F: frame  Click: select  Drag: move (Shift: height)  Arrows / rings: move / turn  Right-click: menu  R: turn  N: normal maps  Ctrl+C/X/V  Esc: galaxy"
             : Tool == "connect" ? "GALAXY:  drag from one sector to another to create a pair of connected gates.   Esc: back to Select"
             : "GALAXY:  double-click an empty hex: new cluster   Drag a sector: move its cluster   Double-click a sector: open it   Wheel: zoom   Right / middle drag: pan") + _gameInfo);
         _side.Rebuild();
@@ -181,7 +188,7 @@ public partial class App : Control
         if (c.Music == "") Music.Stop(); else if (c.Music != Music.Current) Music.Play(c.Music);
     }
 
-    public void SetStatus(string t) => _status.Text = t;
+    public void SetStatus(string t) { _status.Text = t; DebugLog.Add(t); }
     string _gameInfo = "";                          // appended to the hints once the game files are read
     public void SetTool(string t) { Tool = t; Refresh(); }
 
@@ -245,6 +252,82 @@ public partial class App : Control
         }
         try { File.WriteAllText(_file, P.ToJson()); _dirty = false; Refresh(); SetStatus("Project saved: " + _file); }
         catch (Exception e) { Alert("Saving failed: " + e.Message); }
+    }
+
+    // ---------------------------------------------------------------------------------------------- mod export
+    /// <summary>
+    /// Export: open checks -> ask; folder refused if another author's (no marker file); existing export -> ask;
+    /// then write (X4Data.Galaxy.ModExport) and say how to start it in the game.
+    /// </summary>
+    void ExportMod()
+    {
+        var issues = P.Validate();
+        if (issues.Count > 0)
+            Confirm("There are open checks:\n\n- " + string.Join("\n- ", issues.Take(8)) + (issues.Count > 8 ? "\n..." : "") + "\n\nExport anyway?", ExportPage);
+        else ExportPage();
+    }
+
+    /// <summary>The text page must be free: two files with the same page id overwrite each other's texts in the game.</summary>
+    void ExportPage()
+    {
+        var who = PageOwners();
+        if (who.Count > 0)
+            Confirm($"Text page {P.TextPage} is already used by: {string.Join(", ", who)}.\nThe sector names would overwrite (or be overwritten by) those texts. Choose another page in the project settings.\n\nExport anyway?", ExportStep2);
+        else ExportStep2();
+    }
+
+    /// <summary>Who else uses the project's text page (base game or other mods; this project's own earlier export does not count). Empty = free or game not read.</summary>
+    public List<string> PageOwners()
+    {
+        if (Game == null) return new();
+        var used = X4Data.Text.TextPages.Used(Game.Vfs, e => e.FolderName.Equals(P.ModId, StringComparison.OrdinalIgnoreCase));
+        return used.TryGetValue(P.TextPage, out var who) ? who.ToList() : new();
+    }
+
+    void ExportStep2()
+    {
+        var s = Settings.Load(SettingsFile);
+        if (s.ExportFolder == "" || !Directory.Exists(s.ExportFolder))
+        { Alert($"The export folder \"{s.ExportFolder}\" does not exist. Set it under \"Folders...\" (usually the game's \"extensions\" folder)."); return; }
+        var folder = Path.Combine(s.ExportFolder, P.ModId);
+        if (X4Data.Galaxy.ModExport.CheckFolder(folder) is { } why) { Alert(why); return; }
+        if (File.Exists(Path.Combine(folder, X4Data.Galaxy.ModExport.MarkerFile)))
+            Confirm($"\"{folder}\" holds an earlier export of this editor. Replace it?", () => ExportWrite(folder));
+        else ExportWrite(folder);
+    }
+
+    void ExportWrite(string folder)
+    {
+        // what the galaxy needs from DLCs / other mods: becomes the mod's dependency list
+        var deps = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        var missing = new List<string>();
+        string IdOf(string source) =>
+            Game?.Vfs.Extensions.LoadOrder.FirstOrDefault(e => e.FolderName.Equals(source, StringComparison.OrdinalIgnoreCase))?.Id ?? source;
+        foreach (var c in P.Clusters)
+        {
+            var b = Backdrops.FirstOrDefault(e => e.Component.Equals(c.BackdropComponent(), StringComparison.OrdinalIgnoreCase));
+            if (b != null) { if (b.Source != "base") deps.Add(IdOf(b.Source)); }
+            else if (Game != null) missing.Add($"{c.Name}: backdrop {c.BackdropComponent()}");
+        }
+        foreach (var d in P.AllSectors().SelectMany(x => x.Decor))
+        {
+            var item = Decor?.Get(d.Kind, d.Ref);
+            if (item != null) { if (item.Source != "base") deps.Add(IdOf(item.Source)); }
+            else if (Decor != null) missing.Add($"{P.SectorOfDecor(d.Id)?.Name}: {d.Ref}");
+        }
+        var files = X4Data.Galaxy.ModExport.Build(P, new X4Data.Galaxy.ModExport.Options
+        {
+            ObjectClass = m => Game?.Macro(m)?.Attribute("class")?.Value,
+            Dependencies = deps,
+        });
+        try { X4Data.Galaxy.ModExport.Write(folder, files); }
+        catch (Exception e) { Alert("Export failed: " + e.Message); return; }
+        SetStatus($"Exported {files.Count} files to {folder}");
+        var text = $"Exported {files.Count} files to\n{folder}\n\nIn the game: Extensions -> enable \"{P.ModName}\" -> restart -> New Game -> \"{P.ModName}\".";
+        if (deps.Count > 0) text += "\n\nThe mod needs: " + string.Join(", ", deps) + " (written as dependencies).";
+        if (Game == null) text += "\n\nThe game files were not read: DLC dependencies could not be checked.";
+        if (missing.Count > 0) text += "\n\nNot found in the installed game (the game will skip them):\n- " + string.Join("\n- ", missing.Take(8));
+        Alert(text);
     }
 
     // ---------------------------------------------------------------------------------------------- game data
@@ -330,6 +413,12 @@ public partial class App : Control
         else if (k.CtrlPressed && k.Keycode == Key.C) Copy();
         else if (k.CtrlPressed && k.Keycode == Key.X) Cut();
         else if (k.CtrlPressed && k.Keycode == Key.V && OpenSectorId != null) { var c = _sector.ViewCentre(); Paste(c.X, c.Z); }
+        else if (k.Keycode == Key.N && !k.CtrlPressed && OpenSectorId != null)
+        {
+            // which way the normal maps' green channel points: compare the hull bumps, keep the one that looks right
+            X4Shaders.ToggleNormalGreen();
+            SetStatus(X4Shaders.FlipNormalGreen ? "Normal maps: green flipped (DirectX style). N switches back." : "Normal maps: green as stored (OpenGL style). N switches.");
+        }
         else if (k.Keycode == Key.R && Sel?.Kind == "gate" && P.GateById(Sel.Id) is { } g)
             Change(() => g.Yaw = GalaxyOps.NormYaw(g.Yaw + (k.ShiftPressed ? -15 : 15)));
         else if (k.Keycode == Key.R && Sel?.Kind == "decor" && P.DecorById(Sel.Id) is { } d)
@@ -381,6 +470,8 @@ public partial class App : Control
         _shotFrames = -1;
         GetViewport().GetTexture().GetImage().SavePng(_screenshot);
         GD.Print("screenshot saved: " + _screenshot);
+        if (Array.IndexOf(OS.GetCmdlineUserArgs(), "--debugreport") >= 0)   // check of the debug report
+        { _debugShot = GetViewport().GetTexture().GetImage(); GD.Print("debug report: " + CreateDebugReport(true)); }
         GetTree().Quit();
     }
 }

@@ -109,9 +109,11 @@ public partial class SidePanel : VBoxContainer
         var items = cat.Items.Where(i => i.Category == _decorCategory).ToList();
         if (_decorRef == null || items.All(i => i.Ref != _decorRef)) _decorRef = items.FirstOrDefault()?.Ref;
         ChoiceLocal("Item", items.Select(i => (i.Ref, i.Egosoft ? i.Label : "⚠ " + i.Label)).ToArray(), _decorRef ?? "", v => _decorRef = v);
-        var chosen = items.FirstOrDefault(i => i.Ref == _decorRef);
         Button("Add at view centre", () =>
         {
+            // the item chosen NOW: the dropdown changes _decorRef without rebuilding this panel
+            // (before: the item of the panel's last rebuild was added, i.e. the first of the group)
+            var chosen = items.FirstOrDefault(i => i.Ref == _decorRef);
             if (chosen == null) return;
             void Place() => _app.Change(() =>
             {
@@ -120,7 +122,7 @@ public partial class SidePanel : VBoxContainer
                 _app.Sel = new Selection("decor", d.Id);
             });
             if (!chosen.Egosoft) _app.Confirm(ForeignWarning(chosen.Source), Place); else Place();
-        }).Disabled = chosen == null;
+        }).Disabled = items.Count == 0;
         foreach (var d in s.Decor)
         {
             var label = cat.Get(d.Kind, d.Ref)?.Label ?? d.Ref;
@@ -147,7 +149,7 @@ public partial class SidePanel : VBoxContainer
         Number("Turn (°)", d.Yaw, -180, 180, 5, v => d.Yaw = GalaxyOps.NormYaw(v));
         Number("Tilt (°)", d.Pitch, -90, 90, 5, v => d.Pitch = Math.Clamp(Math.Round(v), -90, 90));
         Number("Roll (°)", d.Roll, -180, 180, 5, v => d.Roll = GalaxyOps.NormYaw(v));
-        Hint("Drag the marker in 3D to move it (Shift: up / down, Alt: off the 1 km grid). R / Shift+R turn it.");
+        Hint("Drag the marker in 3D to move it (Shift: up / down, Alt: off the 1 km grid). The arrows move it along one axis, the rings turn it (5° steps, Alt: free). R / Shift+R turn it.");
         var row = new HFlowContainer(); AddChild(row);
         Button("Delete", _app.DeleteSelection, row);
         Button("◀ Sector", () => { _app.Sel = null; _app.Refresh(); }, row);
@@ -275,6 +277,26 @@ public partial class SidePanel : VBoxContainer
         Text("Mod folder / id", P.ModId, v => P.ModId = Clean(v));
         Text("Prefix", P.Prefix, v => P.Prefix = Clean(v).Replace("_", ""));
         Number("Text page", P.TextPage, 1, 9_999_999, 1, v => P.TextPage = (int)v);
+        var pageRow = new HFlowContainer(); AddChild(pageRow);
+        Button("Check page", () =>
+        {
+            var who = _app.PageOwners();
+            _app.SetStatus(_app.Game == null ? "Game files not read: page not checked."
+                : who.Count == 0 ? $"Text page {P.TextPage} is free." : $"Text page {P.TextPage} is used by: {string.Join(", ", who)}");
+        }, pageRow);
+        AddChild(new Label { Text = "Text files (languages):", Modulate = new Color(1, 1, 1, 0.7f) });
+        var langs = new HFlowContainer(); AddChild(langs);
+        foreach (var (lid, lname) in X4Data.Text.TextPages.Languages)
+        {
+            var cb = new CheckBox { Text = lname, ButtonPressed = P.TextLanguages.Count == 0 || P.TextLanguages.Contains(lid) };
+            cb.Toggled += v => _app.Change(() =>
+            {
+                if (P.TextLanguages.Count == 0) P.TextLanguages.AddRange(X4Data.Text.TextPages.Languages.Select(l => l.Id));   // "all" -> explicit list
+                P.TextLanguages.Remove(lid); if (v) P.TextLanguages.Add(lid);
+            });
+            langs.AddChild(cb);
+        }
+        Hint("Each ticked language gets its own t/0001-lNNN.xml with the same (English) names. Nothing ticked = all 16 game languages. Check page: is the page number free in the installed game and mods?");
         Text("Author", P.Author, v => P.Author = v);
         var full = new CheckBox { Text = "Full conversion", ButtonPressed = P.ReplaceVanillaStations };
         full.Toggled += v => _app.Change(() => P.ReplaceVanillaStations = v); AddChild(full);

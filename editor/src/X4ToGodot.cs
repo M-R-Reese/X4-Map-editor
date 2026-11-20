@@ -73,6 +73,14 @@ public sealed class X4ToGodot
             if (uvs.Count == verts.Count) arrays[(int)Mesh.ArrayType.TexUV] = uvs.ToArray();
             if (cols.Count == verts.Count) arrays[(int)Mesh.ArrayType.Color] = cols.ToArray();
             arrays[(int)Mesh.ArrayType.Index] = idx;
+            if (norms.Count == verts.Count && uvs.Count == verts.Count)
+            {
+                // normal maps need tangents; xmf files carry none we read, so Godot computes them (MikkTSpace)
+                var st = new SurfaceTool();
+                st.CreateFromArrays(arrays);
+                st.GenerateTangents();
+                arrays = st.CommitToArrays();
+            }
             mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
             mesh.SurfaceSetMaterial(mesh.GetSurfaceCount() - 1, GetMaterial(r < p.MaterialNames.Length ? p.MaterialNames[r] : ""));
         }
@@ -90,12 +98,15 @@ public sealed class X4ToGodot
     }
 
     /// <summary>
-    /// X4 material -> StandardMaterial3D. Close, not exact: diffuse texture, metal / smooth numbers, additive /
-    /// alpha effects unshaded. Not yet used: normal, smooth, metal, dirt and detail maps (X4's own shaders).
+    /// X4 material -> Godot material. Lit hulls and decals: X4Shaders (diffuse, normal, smooth, metal, glow, detail
+    /// maps as X4 uses them). Everything else (effects, sky, glass, planets): StandardMaterial3D, close, not exact.
     /// </summary>
     Material GetMaterial(string name)
     {
         if (_materials.TryGetValue(name, out var cached)) return cached;
+        var lit = name == "" ? null : _g.Materials.Get(name);
+        if (lit != null && X4Shaders.Handles(lit) && lit.BlendMode is not ("ADDITIVE" or "SCREEN"))
+            return _materials[name] = X4Shaders.Build(lit, GetTexture);
         var m = new StandardMaterial3D { AlbedoColor = new Color(0.55f, 0.57f, 0.6f), Roughness = 0.6f };
         var x = name == "" ? null : _g.Materials.Get(name);
         if (x == null) { if (name != "") Notes.Add($"material '{name}' not in the library"); }

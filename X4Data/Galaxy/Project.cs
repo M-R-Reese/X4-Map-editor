@@ -16,6 +16,8 @@ public sealed class Project
     public string ModName { get; set; } = "My Galaxy";
     public string Prefix { get; set; } = "mg";
     public int TextPage { get; set; } = 400900;
+    /// <summary>Languages the export writes t/0001-lNNN.xml for (all hold the same texts). Empty = all game languages.</summary>
+    public List<int> TextLanguages { get; set; } = new() { 44, 49 };
     public string Author { get; set; } = "M.R. Reese";
     public bool ReplaceVanillaStations { get; set; }
     public int NextId { get; set; } = 1;

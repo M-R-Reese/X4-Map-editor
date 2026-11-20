@@ -60,3 +60,49 @@ public sealed class TextDb
         return sb.ToString().Trim();
     }
 }
+
+/// <summary>
+/// Which text pages the installed game and its extensions already use, and the game's text languages. Used by the
+/// export to warn when the chosen page belongs to someone else (two files with the same page: one overwrites the other).
+/// </summary>
+public static class TextPages
+{
+    /// <summary>The game's languages (t/0001-lNNN.xml of the base game, checked 9.00) with their names.</summary>
+    public static readonly (int Id, string Name)[] Languages =
+    {
+        (44, "English"), (49, "German"), (33, "French"), (34, "Spanish"), (39, "Italian"), (7, "Russian"),
+        (48, "Polish"), (42, "Czech"), (55, "Portuguese (Brazil)"), (90, "Turkish"), (380, "Ukrainian"), (359, "Bulgarian"),
+        (81, "Japanese"), (82, "Korean"), (86, "Chinese (simplified)"), (88, "Chinese (traditional)"),
+    };
+
+    static readonly Regex PageRe = new(@"<page\s[^>]*?\bid\s*=\s*""(\d+)""", RegexOptions.Compiled);
+
+    /// <summary>
+    /// page id -> who uses it ("base game" or the extension's name). One language file per source is read (English if
+    /// there, else the first one): every language file of a mod normally holds the same pages.
+    /// </summary>
+    public static Dictionary<int, SortedSet<string>> Used(Vfs.VirtualFileSystem vfs, Func<Vfs.Extension, bool>? skip = null)
+    {
+        var used = new Dictionary<int, SortedSet<string>>();
+        void Scan(string folder, string owner)
+        {
+            var files = vfs.Under(folder).Where(f => Path.GetFileName(f.Path).StartsWith("0001", StringComparison.OrdinalIgnoreCase)
+                                                    && f.Path.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
+                                                    && f.Path.Count(ch => ch == '/') == folder.Count(ch => ch == '/')).ToList();
+            var file = files.FirstOrDefault(f => f.Path.EndsWith("-l044.xml", StringComparison.OrdinalIgnoreCase)) ?? files.FirstOrDefault();
+            if (file == null) return;
+            string text;
+            try { text = Encoding.UTF8.GetString(file.Read()); } catch { return; }
+            foreach (Match m in PageRe.Matches(text))
+                if (int.TryParse(m.Groups[1].Value, out var id))
+                {
+                    if (!used.TryGetValue(id, out var who)) used[id] = who = new SortedSet<string>();
+                    who.Add(owner);
+                }
+        }
+        Scan("t/", "base game");
+        foreach (var ext in vfs.Extensions.LoadOrder)
+            if (skip == null || !skip(ext)) Scan($"extensions/{ext.FolderName}/t/", string.IsNullOrWhiteSpace(ext.Name) ? ext.Id : ext.Name);
+        return used;
+    }
+}

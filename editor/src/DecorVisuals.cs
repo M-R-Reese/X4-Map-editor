@@ -33,8 +33,11 @@ public sealed class DecorVisuals
     };
 
     /// <summary>Basis from yaw / pitch / roll in mirrored space (X4 -> Godot flips the sign of yaw and pitch, not of roll).</summary>
-    public static Basis Rotation(Decoration d) =>
-        new Basis(Vector3.Up, -Mathf.DegToRad((float)d.Yaw)) * new Basis(Vector3.Right, -Mathf.DegToRad((float)d.Pitch)) * new Basis(Vector3.Back, Mathf.DegToRad((float)d.Roll));
+    public static Basis Rotation(Decoration d) => Rotation(d.Yaw, d.Pitch, d.Roll);
+
+    /// <summary>X4 yaw / pitch / roll (degrees) -> Godot basis (mirrored z: yaw and pitch turn the other way).</summary>
+    public static Basis Rotation(double yaw, double pitch, double roll) =>
+        new Basis(Vector3.Up, -Mathf.DegToRad((float)yaw)) * new Basis(Vector3.Right, -Mathf.DegToRad((float)pitch)) * new Basis(Vector3.Back, Mathf.DegToRad((float)roll));
 
     /// <summary>Body node, marker icon, label and colour of a decoration.</summary>
     public (Node3D body, string icon, string label, Color colour) Build(Decoration d)

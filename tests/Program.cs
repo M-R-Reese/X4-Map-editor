@@ -76,6 +76,7 @@ var game = new GameData(s);
 foreach (var n in game.Notes.Take(10)) Console.WriteLine("  note: " + n);
 ModelTests.Run(game, Check);
 GalaxyTests.Run(Check);
+ExportTests.Run(game, Check);
 DecorTests.Run(game, Check);
 
 Console.WriteLine(failed == 0 ? "\nALL PASSED" : $"\n{failed} FAILED");

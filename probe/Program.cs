@@ -27,6 +27,46 @@ if (mode == "parts")
         Console.WriteLine($"{p.PartName,-14} centre dist {((min + max) / 2).Length():E2} size {(max - min).Length():E2} verts {p.Mesh.Positions.Length,6} {string.Join("/", p.MaterialNames)} [{m?.Shader} {m?.BlendMode}]");
     }
 }
+else if (mode == "material")
+{
+    // material <collection.name> ... : the material's XML as the game merged it (base + extensions)
+    foreach (var file in new[] { "libraries/material_library.xml", "libraries/material_library_1.xml" })
+    {
+        var doc = GameXml.Load(g.Vfs, file, null);
+        foreach (var want in args.Skip(1))
+        {
+            var parts = want.Split('.', 2);
+            var m = doc?.Root?.Elements("collection").Where(c => (string?)c.Attribute("name") == parts[0])
+                .SelectMany(c => c.Elements("material")).FirstOrDefault(x => (string?)x.Attribute("name") == parts[^1]);
+            if (m != null) Console.WriteLine($"== {file}: {m}");
+        }
+    }
+}
+else if (mode == "texture")
+{
+    // texture <path> ... : size and format of game textures
+    foreach (var t in args.Skip(1)) { var d = X4Data.Textures.Dds.Load(g.Vfs, t); Console.WriteLine(d == null ? $"{t}: not found" : $"{t}: {d.Width}x{d.Height} {d.Format} mips {d.Mipmaps}"); }
+}
+else if (mode == "texstats")
+{
+    // texstats <path> ... : average R G B A of the top mip from the block end colours (DXT1 / DXT5): which channels hold data
+    foreach (var t in args.Skip(1))
+    {
+        var d = X4Data.Textures.Dds.Load(g.Vfs, t);
+        if (d == null || (d.Format != "Dxt1" && d.Format != "Dxt5")) { Console.WriteLine($"{t}: {d?.Format ?? "not found"}"); continue; }
+        int bs = d.Format == "Dxt5" ? 16 : 8, blocks = Math.Max(1, d.Width / 4) * Math.Max(1, d.Height / 4);
+        double r = 0, gg = 0, b = 0, a = 0, rMin = 1, rMax = 0, aMin = 1, aMax = 0; int n = 0;
+        for (int i = 0; i < blocks; i += 7, n++)
+        {
+            int o = i * bs; double al = 1;
+            if (bs == 16) { al = (d.Data[o] + d.Data[o + 1]) / 510.0; o += 8; }
+            int c0 = d.Data[o] | d.Data[o + 1] << 8, c1 = d.Data[o + 2] | d.Data[o + 3] << 8;
+            double R = (((c0 >> 11) & 31) + ((c1 >> 11) & 31)) / 62.0, G = (((c0 >> 5) & 63) + ((c1 >> 5) & 63)) / 126.0, B = ((c0 & 31) + (c1 & 31)) / 62.0;
+            r += R; gg += G; b += B; a += al; rMin = Math.Min(rMin, R); rMax = Math.Max(rMax, R); aMin = Math.Min(aMin, al); aMax = Math.Max(aMax, al);
+        }
+        Console.WriteLine($"{t}: R {r / n:F2} ({rMin:F2}-{rMax:F2})  G {gg / n:F2}  B {b / n:F2}  A {a / n:F2} ({aMin:F2}-{aMax:F2})");
+    }
+}
 else if (mode == "mapobjects")
 {
     var count = new Dictionary<string, int>();

@@ -23,11 +23,23 @@ building a galaxy and decorating sectors. Feedback is welcome in the Issues.
   - Choose from every backdrop the installed game has (base game and DLCs), and play the cluster's music.
 - **Decoration:** dropdowns with the game's asteroid fields, gas clouds, nebulae, wreck fields, wrecks, landmarks, data vaults, nav beacons, single asteroids and anomalies, named as the game names them.
   - Drag items with the mouse; Shift + drag changes the height.
+  - The selected item gets move arrows (one per axis) and turn rings, as in X4's station designer.
+  - Ships, gates and objects use the game's own textures with an X4-like shader: metal, smoothness, normal maps and glowing lights.
   - A 2D minimap of the sector.
   - Right-click menu: copy, cut, paste, delete, and connect gates and anomalies to another sector.
 - **Controls:** W A S D / Q E to fly, right mouse button to turn, mouse wheel to zoom. Esc closes the front window.
 
-Not yet: exporting the finished galaxy as a mod (planned next), stations and ships (a later, separate editor).
+- **Export as a mod** (new, not yet tested in the game): **Export mod...** writes the galaxy into the export folder (normally the game's `extensions` folder): map, names, music, fields, objects, linked anomaly pairs, and a game start in the new galaxy. DLCs and mods the galaxy uses become dependencies of the mod. The editor never writes into a folder it did not create. In the project settings you choose the text page (the editor checks that no installed mod uses it) and the languages that get a text file.
+
+Not yet: highways, stations and ships (a later, separate editor).
+
+## Bug reports
+
+**Debug...** in the top bar makes a debug report: one small zip (about 150 KB) on your desktop with the editor version,
+system and graphics card, folder settings, the list of game extensions, the editor's notes and logs, a screenshot and,
+if you want, your project. Your user name and X4 profile number are replaced in all paths; no game files go in.
+Look inside, then send it with a few words on what you did: by e-mail to **debug@astrainferna.com** or as a
+[GitHub issue](https://github.com/M-R-Reese/X4-Map-editor/issues). The window shows both, with Copy buttons.
 
 ## Game files
 

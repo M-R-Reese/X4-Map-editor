@@ -15,6 +15,7 @@ namespace GalaxyEditor3D;
 /// only copies the turn of the front camera (a sky does not move when you fly); in front, the sector with a
 /// transparent background. Both use the backdrop's sun direction.
 /// Mouse: click a marker = select; drag a marker = move it along its height plane; Shift + drag = move it up / down.
+/// The selected item gets a gizmo (Gizmo.cs): arrows move it along one axis, rings turn it.
 /// </summary>
 public partial class SectorView : Control
 {
@@ -37,9 +38,17 @@ public partial class SectorView : Control
     public double Reach { get; private set; } = 200_000;
     /// <summary>Camera pitch / yaw (radians) when a sector opens.</summary>
     public (float pitch, float yaw) StartView = (-0.75f, 0.5f);
+    /// <summary>Screenshot checks (--near metres): camera this close to the selected item after every rebuild.</summary>
+    public float? NearView;
+    /// <summary>Debug: frame rate, draw calls and video memory in the top left corner of the 3D view.</summary>
+    public bool ShowStats { get => _stats.Visible; set => _stats.Visible = value; }
+    readonly Label _stats = new() { Visible = false, Position = new Vector2(10, 8), Modulate = new Color(1, 1, 1, 0.8f) };
+    double _statsTimer;
 
     // dragging
     Item? _drag; Vector3 _dragGrab; bool _dragMoved; Vector2 _dragStart;
+    // move / turn handles on the selected item
+    Gizmo _gizmo = null!; bool _gizmoMoved;
 
     public SectorView(App app)
     {
@@ -75,7 +84,18 @@ public partial class SectorView : Control
         {
             BackgroundMode = Godot.Environment.BGMode.ClearColor,
             AmbientLightSource = Godot.Environment.AmbientSource.Color, AmbientLightColor = new Color(0.55f, 0.6f, 0.7f), AmbientLightEnergy = 0.15f,
-            TonemapMode = Godot.Environment.ToneMapper.Filmic,
+            // metal needs something to reflect (X4 lights hulls with the backdrop): a soft space sky, never drawn
+            // (the background stays transparent), only seen in reflections, with the sun as a bright spot
+            ReflectedLightSource = Godot.Environment.ReflectionSource.Sky,
+            Sky = new Sky { SkyMaterial = new ProceduralSkyMaterial
+            {
+                SkyTopColor = new Color(0.16f, 0.2f, 0.3f), SkyHorizonColor = new Color(0.3f, 0.32f, 0.38f), SkyCurve = 0.2f,
+                GroundBottomColor = new Color(0.05f, 0.05f, 0.07f), GroundHorizonColor = new Color(0.22f, 0.23f, 0.27f),
+                SunAngleMax = 8f, SunCurve = 0.05f,
+            } },
+            TonemapMode = Godot.Environment.ToneMapper.Aces, TonemapWhite = 6f,
+            // glow maps (lights, windows, engines) bloom as in the game
+            GlowEnabled = true, GlowIntensity = 0.7f, GlowBloom = 0.05f, GlowHdrThreshold = 1.0f, GlowBlendMode = Godot.Environment.GlowBlendModeEnum.Screen,
         } });
         _sun = new DirectionalLight3D { RotationDegrees = new Vector3(-35, 40, 0) };
         _vp.AddChild(_sun);
@@ -88,10 +108,12 @@ public partial class SectorView : Control
         _cam.KeysAllowed = () => IsVisibleInTree() && GetTree().Root.GuiGetFocusOwner() is not (LineEdit or TextEdit);
         _vp.AddChild(_cam);
         _content = new Node3D(); _vp.AddChild(_content);
+        _gizmo = new Gizmo(); _vp.AddChild(_gizmo); _gizmo.Init(_cam);
         _visuals = new DecorVisuals(_app);
 
         _minimap = new Minimap(_app, this);
         AddChild(_minimap);
+        AddChild(_stats);
     }
 
     /// <summary>Camera target in X4 space (where "Add" puts new things), on the ecliptic.</summary>
@@ -136,12 +158,19 @@ public partial class SectorView : Control
             AddItem("decor", d.Id, d.X, d.Y, d.Z, node, icon, label, sel ? new Color("ffe066") : colour);
         }
 
+        // handles on the selected gate / decoration (gates turn around "up" only)
+        var selItem = SelectedItem();
+        var sg = selItem?.Kind == "gate" ? _app.P.GateById(selItem.Id) : null;
+        var sd = selItem?.Kind == "decor" ? _app.P.DecorById(selItem.Id) : null;
+        _gizmo.Attach(selItem?.Holder, sd != null, sg?.Yaw ?? sd?.Yaw ?? 0, sd?.Pitch ?? 0, sd?.Roll ?? 0);
+
         if (_shownSector != s.Id)
         {
             _cam.SetView(StartView.pitch, StartView.yaw);
             _cam.Frame(new Aabb(new Vector3((float)-Reach, -20_000, (float)-Reach), new Vector3((float)Reach * 2, 40_000, (float)Reach * 2)), 0.62f);
             _shownSector = s.Id;
         }
+        if (NearView is float near && selItem != null) { _cam.Target = selItem.Holder.Position; _cam.Distance = near; _cam.Refresh(); }
     }
 
     /// <summary>Holder at the X4 position with the model / volume, the marker labels and the height line.</summary>
@@ -164,7 +193,17 @@ public partial class SectorView : Control
         if (!Visible || _bgCam == null) return;
         _bgCam.GlobalBasis = _cam.GlobalBasis;
         _bgCam.Fov = _cam.Fov;
+        if (_gizmo.Visible) _gizmo.Hover(_vp.GetMousePosition());
+        if (_stats.Visible && (_statsTimer -= delta) <= 0)
+        {
+            _statsTimer = 0.5;
+            ulong Info(RenderingServer.RenderingInfo i) => RenderingServer.GetRenderingInfo(i);
+            _stats.Text = $"{Engine.GetFramesPerSecond():0} fps   draw calls {Info(RenderingServer.RenderingInfo.TotalDrawCallsInFrame)}   "
+                + $"triangles {Info(RenderingServer.RenderingInfo.TotalPrimitivesInFrame) / 1000:N0}k   video memory {Info(RenderingServer.RenderingInfo.VideoMemUsed) / 1_048_576} MB   items {_items.Count}";
+        }
     }
+
+    Item? SelectedItem() => _app.Sel is { } sel ? _items.FirstOrDefault(i => i.Kind == sel.Kind && i.Id == sel.Id) : null;
 
     // ---------------------------------------------------------------------------------------------- select and drag
     Item? PickAt(Vector2 screen) =>
@@ -174,12 +213,16 @@ public partial class SectorView : Control
 
     void OnLeftPressed(Vector2 screen)
     {
+        // a handle of the gizmo comes first (it sits on top of everything)
+        var h = _gizmo.Pick(screen);
+        if (h != Gizmo.Handle.None) { _drag = null; _dragStart = screen; _gizmoMoved = false; _gizmo.BeginDrag(h, screen); return; }
         _drag = PickAt(screen); _dragMoved = false; _dragStart = screen;
         if (_drag != null && PlaneHit(screen, _drag.Holder.Position.Y) is { } hit) _dragGrab = _drag.Holder.Position - hit;
     }
 
     void OnLeftDragged(Vector2 screen, Vector2 relative, bool shift)
     {
+        if (_gizmo.Dragging != Gizmo.Handle.None) { GizmoDrag(screen); return; }
         if (_drag == null) return;
         if (!_dragMoved && screen.DistanceTo(_dragStart) < 5) return;
         _dragMoved = true;
@@ -204,6 +247,7 @@ public partial class SectorView : Control
 
     void OnLeftReleased(Vector2 screen)
     {
+        if (_gizmo.Dragging != Gizmo.Handle.None) { GizmoCommit(); return; }
         var d = _drag; _drag = null;
         if (d == null)
         {
@@ -218,6 +262,45 @@ public partial class SectorView : Control
         {
             if (d.Kind == "gate" && _app.P.GateById(d.Id) is { } g) { g.X = x; g.Y = y; g.Z = z; }
             if (d.Kind == "decor" && _app.P.DecorById(d.Id) is { } o) { o.X = x; o.Y = y; o.Z = z; }
+        });
+    }
+
+    /// <summary>Gizmo handle dragged: the item follows at once (position or turn); the project changes on release.</summary>
+    void GizmoDrag(Vector2 screen)
+    {
+        var item = SelectedItem(); if (item == null) return;
+        _gizmoMoved = true;
+        bool snap = !Input.IsKeyPressed(Key.Alt);
+        var p = _gizmo.Drag(screen, snap);
+        var h = _gizmo.Dragging;
+        if (h is Gizmo.Handle.MoveX or Gizmo.Handle.MoveY or Gizmo.Handle.MoveZ)
+        {
+            item.Holder.Position = p;
+            UpdateHeightLine(item.Holder, item.Colour);
+            _app.SetStatus($"x {p.X / 1000:F1} km   height {p.Y / 1000:F1} km   z {-p.Z / 1000:F1} km      (1 km steps; Alt: free)");
+        }
+        else
+        {
+            var body = item.Holder.GetChild<Node3D>(0);                // AddItem puts the model / volume first
+            body.Basis = item.Kind == "gate" ? new Basis(Vector3.Up, -Mathf.DegToRad((float)_gizmo.Yaw)) : DecorVisuals.Rotation(_gizmo.Yaw, _gizmo.Pitch, _gizmo.Roll);
+            _app.SetStatus(item.Kind == "gate" ? $"facing {_gizmo.Yaw:0.#}°      (5° steps; Alt: free)"
+                : $"yaw {_gizmo.Yaw:0.#}°   pitch {_gizmo.Pitch:0.#}°   roll {_gizmo.Roll:0.#}°      (5° steps; Alt: free)");
+        }
+    }
+
+    /// <summary>Gizmo released: one undo step with the new position / angles.</summary>
+    void GizmoCommit()
+    {
+        _gizmo.EndDrag();
+        var item = SelectedItem();
+        if (item == null || !_gizmoMoved) return;
+        var p = item.Holder.Position;
+        double x = Math.Round(p.X), y = Math.Round(p.Y), z = Math.Round(-p.Z);
+        double yaw = _gizmo.Yaw, pitch = _gizmo.Pitch, roll = _gizmo.Roll;
+        _app.Change(() =>
+        {
+            if (item.Kind == "gate" && _app.P.GateById(item.Id) is { } g) { g.X = x; g.Y = y; g.Z = z; g.Yaw = yaw; }
+            if (item.Kind == "decor" && _app.P.DecorById(item.Id) is { } o) { o.X = x; o.Y = y; o.Z = z; o.Yaw = yaw; o.Pitch = pitch; o.Roll = roll; }
         });
     }
 
