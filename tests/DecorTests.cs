@@ -26,5 +26,25 @@ static class DecorTests
             Console.WriteLine($"  {grp.Key,-16} {grp.Count(),4}  e.g. {string.Join(" | ", grp.Take(2).Select(i => i.Label))}");
         check("decoration catalogue", cat.Items.Count(i => i.Kind == "object") > 100 && cat.Categories.Count() >= 6, $"{cat.Items.Count} items");
         check("objects have names", cat.Items.Where(i => i.Kind == "object").All(i => i.Label != ""), "");
+
+        // random resources + fields: every resource area has a field holding its ware, every field's wares have an area
+        var fields = cat.Regions.All.Where(f => !f.Hidden && (f.Source == "base" || f.Source.StartsWith("ego_", StringComparison.OrdinalIgnoreCase)))
+            .Select(f => (f.Name, (IReadOnlyList<string>)f.Wares.ToList(), (double)f.R)).ToList();
+        var rp = new X4Data.Galaxy.Project(); var rs = X4Data.Galaxy.GalaxyOps.AddCluster(rp, 0, 0); X4Data.Galaxy.GalaxyOps.AddGate(rp, rs, 150_000, 0);
+        var rng = new Random(3); int bad = 0, nFields = 0, nAreas = 0; var dropped = new HashSet<string>(); var issues = new List<string>();
+        for (int i = 0; i < 100; i++)
+        {
+            rs.Decor.Clear();
+            X4Data.Galaxy.GalaxyOps.RandomResources(rs, rng);
+            var before = rs.Res.Select(r => r.Ware).ToHashSet();
+            var placed = X4Data.Galaxy.GalaxyOps.AddFieldsForResources(rp, rs, fields, rng);
+            dropped.UnionWith(before.Except(rs.Res.Select(r => r.Ware)));
+            nFields += placed.Count; nAreas += rs.Res.Count;
+            var v = X4Data.Galaxy.GalaxyOps.Validate(rp, r => cat.Regions.Get(r) is { } d ? d.Wares : Enumerable.Empty<string>()).Where(x => x.Contains("resource area")).ToList();
+            if (v.Count > 0 || rs.Res.Count == 0) { bad++; issues.AddRange(v); }
+            if (placed.Any(d => Math.Sqrt(d.X * d.X + d.Z * d.Z) < 29_000 || Math.Sqrt(d.X * d.X + d.Z * d.Z) > 151_000)) bad++;
+        }
+        check("random resources place fields: no field / area warning in 100 sectors", bad == 0,
+            $"{nFields} fields for {nAreas} areas; dropped (no field holds them): {string.Join(", ", dropped)}; {string.Join(" | ", issues.Distinct().Take(3))}");
     }
 }

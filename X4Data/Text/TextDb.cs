@@ -15,6 +15,8 @@ public sealed class TextDb
     readonly Dictionary<(int page, int id), string> _raw = new();
     public int Language { get; }
     public int Count => _raw.Count;
+    /// <summary>All texts as written (references unresolved), by (page, id).</summary>
+    public IReadOnlyDictionary<(int page, int id), string> Raw => _raw;
     static readonly Regex RefRe = new(@"\{(\d+)\s*,\s*(\d+)\}");
 
     public TextDb(GameData g, int language = 44)

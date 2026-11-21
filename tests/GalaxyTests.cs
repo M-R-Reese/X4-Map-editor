@@ -15,6 +15,20 @@ static class GalaxyTests
         check("one sector unreachable is reported", issues.Count == 1 && issues[0].Contains("cannot be reached"), string.Join(" | ", issues));
         p.ConnectSectors(b, b2);
         check("connected galaxy has no problems", p.Validate().Count == 0, string.Join(" | ", p.Validate()));
+        // 9.00 yields: field (where) + resource area (how much)
+        var rs = p.AllSectors().First();
+        var fieldWares = new Dictionary<string, string[]> { ["f_ore"] = new[] { "ore", "silicon", "rawkhaakscrap" } };
+        IEnumerable<string> Wares(string r) => fieldWares.TryGetValue(r, out var w) ? w : Array.Empty<string>();
+        p.AddDecor(rs, "region", "f_ore", 0, 0, 0);
+        check("field without resource area is reported", p.Validate(Wares).Any(i => i.Contains("no ore resource area")), string.Join(" | ", p.Validate(Wares)));
+        var added = rs.AddResourcesFor(Wares("f_ore"), 25_000);
+        check("placing a field adds its resource areas (known wares only, size from radius)",
+            added.SequenceEqual(new[] { "ore", "silicon" }) && rs.Res.All(r => r.Size == "small") && rs.AddResourcesFor(Wares("f_ore"), 25_000).Count == 0,
+            string.Join(", ", rs.Res.Select(r => $"{r.Ware} {r.Size}")));
+        check("field + resource areas: no yield warning", !p.Validate(Wares).Any(i => i.Contains("resource area")), string.Join(" | ", p.Validate(Wares)));
+        rs.Res.Add(new ResourceArea { Ware = "helium" });
+        check("resource area without a field is reported", p.Validate(Wares).Any(i => i.Contains("helium resource area without a field")), "");
+
         var g = a.Gates[0];
         check("gate 180 km out, facing the centre", Math.Abs(Math.Sqrt(g.X * g.X + g.Z * g.Z) - 180_000) < 2 && g.Yaw == GalaxyOps.FaceCentre(g.X, g.Z), $"x {g.X} z {g.Z} yaw {g.Yaw}");
 
@@ -46,5 +60,27 @@ static class GalaxyTests
 
         p.DeleteSector(b.Id);
         check("deleting a sector unlinks its gates", p.AllSectors().SelectMany(s => s.Gates).All(x => x.Link == null || p.GateById(x.Link) != null), "");
+
+        // random resources: always at least one known ware, every value from the editor's lists, nividium / scrap rare
+        var rsec = new Sector(); var rng = new Random(7); int nivid = 0, ore = 0, empty = 0;
+        for (int i = 0; i < 500; i++)
+        {
+            rsec.RandomResources(rng);
+            if (rsec.Res.Count == 0) empty++;
+            if (rsec.Res.Any(r => r.Ware == "nividium")) nivid++;
+            if (rsec.Res.Any(r => r.Ware == "ore")) ore++;
+            if (rsec.Res.Any(r => !GalaxyFacts.ResWare.Contains(r.Ware) || !GalaxyFacts.ResSize.Contains(r.Size) || !GalaxyFacts.ResYield.Contains(r.Yield) || !GalaxyFacts.ResSpeed.Contains(r.Speed))) empty += 1000;
+        }
+        check("random resources: never empty, valid values, ore common, nividium rare", empty == 0 && ore > 300 && nivid < 80, $"ore {ore}, nividium {nivid} of 500");
+
+        // clear sector / all / map
+        var cp = new Project(); var c1 = cp.AddCluster(0, 0); var c2 = cp.AddCluster(1, 0);
+        cp.ConnectSectors(c1, c2);
+        c1.Res.Add(new ResourceArea()); c1.Ai = new SectorAi { Owner = "argon" }; cp.AddDecor(c1, "object", "x", 0, 0, 0);
+        cp.ClearSector(c1);
+        check("clear sector: empty, name kept, partner gate unlinked",
+            c1.Gates.Count == 0 && c1.Decor.Count == 0 && c1.Res.Count == 0 && c1.Ai == null && c1.Name != "" && c2.Gates.All(g => g.Link == null), "");
+        cp.ClearMap();
+        check("clear map: no clusters, no start sector", cp.Clusters.Count == 0 && cp.StartSector == null && cp.BaseGates.Count == 0, "");
     }
 }

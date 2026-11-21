@@ -22,6 +22,9 @@ public sealed class Regions
         public float Density = 1;
         public List<string> AsteroidWares = new();   // ore, silicon, ice, nividium ... (from asteroid groups)
         public List<string> Gases = new();           // hydrogen, helium, methane ... (nebula resources)
+        public List<string> DebrisWares = new();     // rawscrap ... (debris groups with a resource, wreck fields)
+        /// <summary>Every minable ware of the field: asteroids, gases, debris.</summary>
+        public IEnumerable<string> Wares => AsteroidWares.Concat(Gases).Concat(DebrisWares).Distinct();
         public List<string> FogMedia = new();        // volumetric fog media (look only)
         public bool Debris, Objects, Nebula;
         public string Category = "Other";             // Asteroid field, Gas cloud, Nebula, Wreck field, Other
@@ -51,6 +54,10 @@ public sealed class Regions
     public Regions(GameData g)
     {
         var doc = GameXml.Load(g.Vfs, "libraries/region_definitions.xml", g.Notes);
+        // object groups name their ware (resource="ore" / "rawscrap"); the group name is only a fallback guess
+        var groupWare = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var gr in GameXml.Load(g.Vfs, "libraries/regionobjectgroups.xml", g.Notes)?.Root?.Elements("group") ?? Enumerable.Empty<XElement>())
+            if ((string?)gr.Attribute("name") is { } gn && (string?)gr.Attribute("resource") is { Length: > 0 } res) groupWare[gn] = res;
         foreach (var r in doc?.Root?.Elements("region") ?? Enumerable.Empty<XElement>())
         {
             var d = new Def { Name = (string?)r.Attribute("name") ?? "", Density = F(r, "density", 1) };
@@ -67,7 +74,7 @@ public sealed class Regions
                 // groupref "asteroid_ore_l" -> ore; "asteroid_ice_xs" -> ice
                 var gr = ((string?)a.Attribute("groupref") ?? (string?)a.Attribute("ref") ?? "").ToLowerInvariant();
                 var parts = gr.Split('_');
-                var ware = parts.Length >= 2 && parts[0] == "asteroid" ? parts[1] : "";
+                var ware = groupWare.TryGetValue(gr, out var gw) ? gw : parts.Length >= 2 && parts[0] == "asteroid" ? parts[1] : "";
                 if (ware != "" && !d.AsteroidWares.Contains(ware)) d.AsteroidWares.Add(ware);
             }
             foreach (var n in fields?.Elements("nebula") ?? Enumerable.Empty<XElement>())
@@ -81,6 +88,8 @@ public sealed class Regions
                 var med = (string?)f.Attribute("medium") ?? "";
                 if (med != "" && !d.FogMedia.Contains(med)) d.FogMedia.Add(med);
             }
+            foreach (var db in fields?.Elements("debris") ?? Enumerable.Empty<XElement>())
+                if (groupWare.TryGetValue((string?)db.Attribute("groupref") ?? "", out var dw) && !d.DebrisWares.Contains(dw)) d.DebrisWares.Add(dw);
             d.Debris = fields?.Elements("debris").Any() == true;
             d.Objects = fields?.Elements("object").Any() == true;
 
@@ -125,7 +134,7 @@ public sealed class Regions
             "Asteroid field" => string.Join(", ", d.AsteroidWares),
             "Gas cloud" => string.Join(", ", d.Gases),
             "Nebula" => d.FogMedia.Count > 0 ? string.Join(", ", d.FogMedia.Take(2)) : "fog",
-            "Wreck field" => d.Gases.Count > 0 ? "wrecks, " + string.Join(", ", d.Gases) : "wrecks",
+            "Wreck field" => string.Join(", ", new[] { "wrecks" }.Concat(d.DebrisWares).Concat(d.Gases)),
             _ => d.Name,
         };
         string size = d.Boundary == "splinetube" ? $"tube {d.Size / 1000:N0} km long" : $"{d.Size / 1000:N0} km";

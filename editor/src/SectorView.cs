@@ -26,6 +26,9 @@ public partial class SectorView : Control
     Node3D _bgContent = null!, _content = null!;
     OrbitCamera _cam = null!;
     Minimap _minimap = null!;
+    /// <summary>Decoration palette on the left (groups, tiles with pictures).</summary>
+    public DecorPalette Palette { get; private set; } = null!;
+    bool _placed;                                                   // the click placed an item: its release must not deselect
     DecorVisuals _visuals = null!;
     string? _shownBackdrop;
     readonly Dictionary<string, Node3D?> _backdrops = new();  // backdrop component -> template
@@ -42,7 +45,7 @@ public partial class SectorView : Control
     public float? NearView;
     /// <summary>Debug: frame rate, draw calls and video memory in the top left corner of the 3D view.</summary>
     public bool ShowStats { get => _stats.Visible; set => _stats.Visible = value; }
-    readonly Label _stats = new() { Visible = false, Position = new Vector2(10, 8), Modulate = new Color(1, 1, 1, 0.8f) };
+    readonly Label _stats = new() { Visible = false, Position = new Vector2(480, 8), Modulate = new Color(1, 1, 1, 0.8f) };
     double _statsTimer;
 
     // dragging
@@ -113,6 +116,9 @@ public partial class SectorView : Control
 
         _minimap = new Minimap(_app, this);
         AddChild(_minimap);
+        Palette = new DecorPalette(_app);
+        Palette.SetAnchorsPreset(LayoutPreset.LeftWide);
+        AddChild(Palette);
         AddChild(_stats);
     }
 
@@ -143,7 +149,7 @@ public partial class SectorView : Control
         foreach (var g in s.Gates)
         {
             bool sel = _app.Sel is { Kind: "gate" } x && x.Id == g.Id;
-            var target = g.Link != null ? _app.P.SectorOfGate(g.Link.Value)?.Name : null;
+            var target = _app.P.LinkTarget(g);
             var colour = sel ? new Color("ffe066") : target != null ? new Color("cfe3ff") : new Color("ffb347");
             var model = GateModel(g.Type);
             model.Basis = new Basis(Vector3.Up, -Mathf.DegToRad((float)g.Yaw));      // yaw 0 = looks north (+z in X4)
@@ -162,7 +168,8 @@ public partial class SectorView : Control
         var selItem = SelectedItem();
         var sg = selItem?.Kind == "gate" ? _app.P.GateById(selItem.Id) : null;
         var sd = selItem?.Kind == "decor" ? _app.P.DecorById(selItem.Id) : null;
-        _gizmo.Attach(selItem?.Holder, sd != null, sg?.Yaw ?? sd?.Yaw ?? 0, sd?.Pitch ?? 0, sd?.Roll ?? 0);
+        Palette.Visible = !_app.ReadOnly;
+        _gizmo.Attach(selItem != null && _app.Movable(selItem.Kind, selItem.Id) ? selItem.Holder : null, sd != null, sg?.Yaw ?? sd?.Yaw ?? 0, sd?.Pitch ?? 0, sd?.Roll ?? 0);
 
         if (_shownSector != s.Id)
         {
@@ -214,6 +221,18 @@ public partial class SectorView : Control
     void OnLeftPressed(Vector2 screen)
     {
         // a handle of the gizmo comes first (it sits on top of everything)
+        _placed = false;
+        // an item from the palette in the hand: the click places it on the ecliptic (1 km grid, Alt: free)
+        if (_app.Armed is { } armed && PlaneHit(screen, 0) is { } spot)
+        {
+            double px = spot.X, pz = -spot.Z;
+            if (!Input.IsKeyPressed(Key.Alt)) { px = Math.Round(px / 1000) * 1000; pz = Math.Round(pz / 1000) * 1000; }
+            _drag = null; _placed = true;
+            bool more = Input.IsKeyPressed(Key.Shift);
+            if (!more) _app.Disarm();
+            _app.PlaceDecor(armed, (Math.Round(px), 0, Math.Round(pz)));
+            return;
+        }
         var h = _gizmo.Pick(screen);
         if (h != Gizmo.Handle.None) { _drag = null; _dragStart = screen; _gizmoMoved = false; _gizmo.BeginDrag(h, screen); return; }
         _drag = PickAt(screen); _dragMoved = false; _dragStart = screen;
@@ -223,7 +242,7 @@ public partial class SectorView : Control
     void OnLeftDragged(Vector2 screen, Vector2 relative, bool shift)
     {
         if (_gizmo.Dragging != Gizmo.Handle.None) { GizmoDrag(screen); return; }
-        if (_drag == null) return;
+        if (_drag == null || !_app.Movable(_drag.Kind, _drag.Id)) return;   // vanilla things of a patched sector stay put
         if (!_dragMoved && screen.DistanceTo(_dragStart) < 5) return;
         _dragMoved = true;
         var p = _drag.Holder.Position;
@@ -248,6 +267,7 @@ public partial class SectorView : Control
     void OnLeftReleased(Vector2 screen)
     {
         if (_gizmo.Dragging != Gizmo.Handle.None) { GizmoCommit(); return; }
+        if (_placed) { _placed = false; return; }
         var d = _drag; _drag = null;
         if (d == null)
         {
@@ -310,6 +330,8 @@ public partial class SectorView : Control
     /// </summary>
     void OnRightClicked(Vector2 screen)
     {
+        if (_app.ReadOnly) return;                                     // nothing to do in a read-only sector
+        if (_app.Armed != null) { _app.Disarm(); return; }             // right click puts the palette item away
         var item = PickAt(screen);
         var at = PlaneHit(screen, 0);                                 // the clicked spot on the ecliptic (Godot space)
         var menu = new PopupMenu();
@@ -355,6 +377,11 @@ public partial class SectorView : Control
         else
         {
             Add("Paste here  (Ctrl+V)", () => { if (at is { } p) _app.Paste(Math.Round(p.X), Math.Round(-p.Z)); }, _app.CanPaste && at != null);
+        }
+        if (_app.OpenSectorId is int open)
+        {
+            menu.AddSeparator();
+            Add("Clear sector ...", () => _app.ClearSector(open));      // asks first
         }
         menu.IdPressed += id => actions[(int)id]();
         menu.PopupHide += () => { _app.WindowClosed(menu); menu.QueueFree(); };

@@ -9,7 +9,8 @@ public sealed class Settings
     public string GameFolder { get; set; } = "";
     /// <summary>Profile folder Documents\Egosoft\X4\&lt;id&gt;: its content.xml says which mods are switched on. Optional.</summary>
     public string ProfileFolder { get; set; } = "";
-    /// <summary>More folders that hold mods (each mod = a subfolder with content.xml), e.g. Steam Workshop. Optional.</summary>
+    /// <summary>Mods outside the game's extensions folder: a mod folder (has content.xml) or a folder of mods (each a
+    /// subfolder with content.xml, e.g. Steam Workshop). Those mods are read as switched on. Optional.</summary>
     public List<string> ExtraModFolders { get; set; } = new();
     /// <summary>Folders with extracted game files (like X4_Reference). Their files win over the archives. Optional.</summary>
     public List<string> ExtractedFolders { get; set; } = new();

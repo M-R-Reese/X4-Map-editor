@@ -84,11 +84,14 @@ public sealed class Component
     /// Transform of a part relative to the component: its connection's offset, then the parent part's, up the chain.
     /// Returned as a matrix in X4 space (row vectors, System.Numerics convention).
     /// </summary>
-    public Matrix4x4 PartTransform(Part part)
+    public Matrix4x4 PartTransform(Part part) => ConnectionTransform(part.Owner);
+
+    /// <summary>Transform of a connection relative to the component (its offset, then its parent part's, up the chain).</summary>
+    public Matrix4x4 ConnectionTransform(Connection start)
     {
         var byName = PartsByName();
         var m = Matrix4x4.Identity;
-        var con = part.Owner;
+        var con = start;
         for (int guard = 0; con != null && guard < 64; guard++)
         {
             m *= Matrix4x4.CreateFromQuaternion(con.Rotation) * Matrix4x4.CreateTranslation(con.Position);

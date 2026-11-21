@@ -13,6 +13,8 @@ public sealed class Extension
     public string Name { get; init; } = "";
     public int Version { get; init; }
     public bool Enabled { get; set; }
+    /// <summary>Found in one of Settings.ExtraModFolders (not the game's extensions folder): opened on purpose, always on.</summary>
+    public bool External { get; set; }
     /// <summary>Why it is on or off (content.xml default / profile list).</summary>
     public string EnabledBy { get; set; } = "";
     public List<Dependency> Dependencies { get; } = new();

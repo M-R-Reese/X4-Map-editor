@@ -24,6 +24,12 @@ public static class ModExport
         public IEnumerable<string> Dependencies { get; init; } = Array.Empty<string>();
         /// <summary>Lowest game version (content.xml dependency without id), 900 = 9.00.</summary>
         public int GameVersion { get; init; } = 900;
+        /// <summary>PATCH projects: the galaxy the patch adds to, as read from the installed game (paths of its sectors and gates).</summary>
+        public BaseGalaxy? Base { get; init; }
+        /// <summary>PATCH projects: the game file that defines a macro (e.g. "extensions/ego_dlc_boron/maps/xu_ep2_universe/dlc_boron_sector_macros.xml").</summary>
+        public Func<string, string?> MacroFile { get; init; } = _ => null;
+        /// <summary>Factions and station types of the installed game (sector AI: owner, pirates). Null = game not read: fallbacks.</summary>
+        public FactionCatalog? Factions { get; init; }
     }
 
     static readonly Dictionary<string, string> GateMacros = new()
@@ -59,10 +65,16 @@ public static class ModExport
         public string GateZone(Sector s, Gate g) => $"{_p}_zo_s{Pad(s.Id)}_g{Pad(g.Id)}";
         public string Gate(Gate g) => $"{_p}_ga_g{Pad(g.Id)}";
         public string Region(Sector s, Decoration d) => $"{_p}_re_s{Pad(s.Id)}_d{Pad(d.Id)}";
+        /// <summary>PATCH: zone and gate the patch adds to a sector of the patched galaxy.</summary>
+        public string BaseZone(BaseGate b) => $"{_p}_zo_b{Pad(b.Id)}";
+        public string BaseGateName(BaseGate b) => $"{_p}_ga_b{Pad(b.Id)}";
         /// <summary>MD file name (md/&lt;Script&gt;.xml).</summary>
         public string Script => $"{_p}_galaxy";
         /// <summary>MD script name: the game wants a capital first letter ([A-Z][A-Za-z0-9_]+).</summary>
         public string ScriptName => char.ToUpperInvariant(_p[0]) + _p[1..] + "_Galaxy";
+        /// <summary>god.xml ids of the sector AI's stations (owner's claim station, pirate station).</summary>
+        public string OwnerStation(Sector s) => $"{_p}_ai_s{Pad(s.Id)}_owner";
+        public string PirateStation(Sector s) => $"{_p}_ai_s{Pad(s.Id)}_pirate";
     }
 
     public static Dictionary<string, string> Build(Project p, Options? o = null)
@@ -72,28 +84,56 @@ public static class ModExport
         var files = new Dictionary<string, string>();
         var texts = new List<(int Id, string Text)>();
         string T(int id, string text) { texts.Add((id, text)); return $"{{{p.TextPage},{id}}}"; }
+        // a voiced name: one pool reference goes straight into mapdefaults (as vanilla does with its own pages);
+        // pool name + numeral is a text of our page that refers to both (like vanilla sector names do)
+        string Name(int id, string name, string? nameRef) =>
+            nameRef == null ? T(id, name) : System.Text.RegularExpressions.Regex.IsMatch(nameRef.Trim(), @"^\{\d+,\d+\}$") ? nameRef.Trim() : T(id, nameRef);
         string galaxy = n.Galaxy;
         var all = p.Clusters.SelectMany(c => c.Sectors.Select(s => (c, s))).ToList();
 
+        // PATCH: the galaxy is not ours; our files sit in its map folder with our prefix (never the game's file names)
+        bool patch = p.BaseGalaxy != null;
+        if (patch && o.Base == null) throw new InvalidOperationException("A patch needs the galaxy it adds to (game files not read).");
+        string folder = patch ? p.BaseFolder! : galaxy;
+        string Fn(string kind) => patch ? $"{p.Prefix}_{kind}" : kind;
+        var extraDeps = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
         // ---- galaxy.xml: clusters on the hex grid + which gate leads to which ----
-        var x = new StringBuilder(Head);
-        x.Append($"<macros>\n  <macro name=\"{galaxy}_macro\" class=\"galaxy\">\n    <component ref=\"standardgalaxy\" />\n    <connections>\n");
+        var cons = new StringBuilder();
         foreach (var c in p.Clusters)
-            x.Append($"      <connection name=\"{n.Cluster(c)}_connection\" ref=\"clusters\">\n        <offset>\n          <position x=\"{Num(c.Q * GalaxyFacts.HexX)}\" y=\"0\" z=\"{Num(c.R * GalaxyFacts.HexZ)}\" />\n        </offset>\n        <macro ref=\"{n.Cluster(c)}_macro\" connection=\"galaxy\" />\n      </connection>\n");
+            cons.Append($"      <connection name=\"{n.Cluster(c)}_connection\" ref=\"clusters\">\n        <offset>\n          <position x=\"{Num(c.Q * GalaxyFacts.HexX)}\" y=\"0\" z=\"{Num(c.R * GalaxyFacts.HexZ)}\" />\n        </offset>\n        <macro ref=\"{n.Cluster(c)}_macro\" connection=\"galaxy\" />\n      </connection>\n");
         string GPath(Cluster c, Sector s, Gate g) => $"{n.Cluster(c)}_connection/{n.Sector(c, s)}_connection/{n.GateZone(s, g)}_connection/{n.Gate(g)}_connection";
         var done = new HashSet<int>();
         foreach (var (c, s) in all)
             foreach (var g in s.Gates)
             {
                 if (g.Link == null || done.Contains(g.Id)) continue;
+                if (p.BaseGateById(g.Link) is { } bg)
+                {
+                    // PATCH: to a gate on the patched galaxy's side (a reused vanilla gate, or the new one in our zone there)
+                    var (bc, bs) = BaseSector(o.Base!, bg.SectorMacro);
+                    var other = bg.Existing ?? $"{bc.Connection}/{bs.Connection}/{n.BaseZone(bg)}_connection/{n.BaseGateName(bg)}_connection";
+                    if (bs.Source != "base") extraDeps.Add(bs.Source);
+                    if (bc.Source != "base") extraDeps.Add(bc.Source);
+                    cons.Append($"      <connection name=\"{p.Prefix}_link_g{Pad(g.Id)}_b{Pad(bg.Id)}\" ref=\"destination\" path=\"../{GPath(c, s, g)}\">\n        <macro connection=\"destination\" path=\"../../../../../{other}\" />\n      </connection>\n");
+                    continue;
+                }
                 var s2 = p.SectorOfGate(g.Link.Value); var g2 = p.GateById(g.Link);
                 if (s2 == null || g2 == null) continue;
                 var c2 = p.ClusterOf(s2.Id)!;
                 done.Add(g2.Id);
-                x.Append($"      <connection name=\"{p.Prefix}_link_g{Pad(g.Id)}_g{Pad(g2.Id)}\" ref=\"destination\" path=\"../{GPath(c, s, g)}\">\n        <macro connection=\"destination\" path=\"../../../../../{GPath(c2, s2, g2)}\" />\n      </connection>\n");
+                cons.Append($"      <connection name=\"{p.Prefix}_link_g{Pad(g.Id)}_g{Pad(g2.Id)}\" ref=\"destination\" path=\"../{GPath(c, s, g)}\">\n        <macro connection=\"destination\" path=\"../../../../../{GPath(c2, s2, g2)}\" />\n      </connection>\n");
             }
-        x.Append("    </connections>\n  </macro>\n</macros>\n");
-        files[$"maps/{galaxy}/galaxy.xml"] = x.ToString();
+        if (patch)
+        {
+            // added to the patched galaxy's macro, in a file at the same path as the one that defines it
+            // (base game: maps/<galaxy>/galaxy.xml; a mod's galaxy: extensions/<its folder>/maps/<galaxy>/galaxy.xml)
+            files[o.Base!.Galaxy.File] = Head + $"<diff>\n  <add sel=\"/macros/macro[@name='{p.BaseGalaxy}']/connections\">\n{cons}  </add>\n</diff>\n";
+            if (o.Base.Galaxy.Source != "base") extraDeps.Add(o.Base.Galaxy.Source);
+        }
+        else
+            files[$"maps/{galaxy}/galaxy.xml"] = Head + $"<macros>\n  <macro name=\"{galaxy}_macro\" class=\"galaxy\">\n    <component ref=\"standardgalaxy\" />\n    <connections>\n{cons}    </connections>\n  </macro>\n</macros>\n";
+        var x = new StringBuilder();
 
         // ---- clusters.xml: sectors (at their place in the backdrop), fields (regions), backdrop ----
         x = new StringBuilder(Head).Append("<macros>\n");
@@ -119,7 +159,7 @@ public static class ModExport
             }
             x.Append($"      <connection ref=\"content\">\n        <macro>\n          <component connection=\"space\" ref=\"{Xa(c.BackdropComponent())}\" />\n        </macro>\n      </connection>\n    </connections>\n  </macro>\n");
         }
-        files[$"maps/{galaxy}/clusters.xml"] = x.Append("</macros>\n").ToString();
+        files[$"maps/{folder}/{Fn("clusters")}.xml"] = x.Append("</macros>\n").ToString();
 
         // ---- sectors.xml: one zone per gate, at the gate's place ----
         x = new StringBuilder(Head).Append("<macros>\n");
@@ -130,7 +170,17 @@ public static class ModExport
                 x.Append($"      <connection name=\"{n.GateZone(s, g)}_connection\" ref=\"zones\">\n        <offset>\n          <position x=\"{Num(g.X)}\" y=\"{Num(g.Y)}\" z=\"{Num(g.Z)}\" />\n        </offset>\n        <macro ref=\"{n.GateZone(s, g)}_macro\" connection=\"sector\" />\n      </connection>\n");
             x.Append("    </connections>\n  </macro>\n");
         }
-        files[$"maps/{galaxy}/sectors.xml"] = x.Append("</macros>\n").ToString();
+        files[$"maps/{folder}/{Fn("sectors")}.xml"] = x.Append("</macros>\n").ToString();
+
+        // ---- PATCH: new gates in sectors of the patched galaxy: a zone each, added by a diff of the file defining the sector ----
+        foreach (var grp in p.BaseGates.Where(b => b.Existing == null).GroupBy(b => o.MacroFile(b.SectorMacro) ?? ""))
+        {
+            if (grp.Key == "") throw new InvalidOperationException($"Sector {grp.First().SectorName} ({grp.First().SectorMacro}) not found in the game files.");
+            var d = new StringBuilder(Head).Append("<diff>\n");
+            foreach (var bg in grp)
+                d.Append($"  <add sel=\"/macros/macro[@name='{bg.SectorMacro}']/connections\">\n    <connection name=\"{n.BaseZone(bg)}_connection\" ref=\"zones\">\n      <offset>\n        <position x=\"{Num(bg.X)}\" y=\"{Num(bg.Y)}\" z=\"{Num(bg.Z)}\" />\n      </offset>\n      <macro ref=\"{n.BaseZone(bg)}_macro\" connection=\"sector\" />\n    </connection>\n  </add>\n");
+            files[grp.Key] = d.Append("</diff>\n").ToString();
+        }
 
         // ---- zones.xml: the gate itself, turned by its facing (quaternion about the vertical axis, as the vanilla gates) ----
         x = new StringBuilder(Head).Append("<macros>\n");
@@ -141,46 +191,90 @@ public static class ModExport
                 var macro = GateMacros.TryGetValue(g.Type, out var m) ? m : GateMacros["gate"];
                 x.Append($"  <macro name=\"{n.GateZone(s, g)}_macro\" class=\"zone\">\n    <component ref=\"standardzone\" />\n    <connections>\n      <connection name=\"{n.Gate(g)}_connection\" ref=\"gates\">\n        <offset>\n          <position x=\"0\" y=\"0\" z=\"0\" />\n          <quaternion qx=\"0\" qy=\"{Q(Math.Sin(h))}\" qz=\"0\" qw=\"{Q(Math.Cos(h))}\" />\n        </offset>\n        <macro ref=\"{macro}\" connection=\"space\" />\n      </connection>\n    </connections>\n  </macro>\n");
             }
-        files[$"maps/{galaxy}/zones.xml"] = x.Append("</macros>\n").ToString();
+        foreach (var bg in p.BaseGates.Where(b => b.Existing == null))
+        {
+            double h = bg.Yaw * Math.PI / 360;
+            var macro = GateMacros.TryGetValue(bg.Type, out var m) ? m : GateMacros["gate"];
+            x.Append($"  <macro name=\"{n.BaseZone(bg)}_macro\" class=\"zone\">\n    <component ref=\"standardzone\" />\n    <connections>\n      <connection name=\"{n.BaseGateName(bg)}_connection\" ref=\"gates\">\n        <offset>\n          <position x=\"0\" y=\"0\" z=\"0\" />\n          <quaternion qx=\"0\" qy=\"{Q(Math.Sin(h))}\" qz=\"0\" qw=\"{Q(Math.Cos(h))}\" />\n        </offset>\n        <macro ref=\"{macro}\" connection=\"space\" />\n      </connection>\n    </connections>\n  </macro>\n");
+        }
+        files[$"maps/{folder}/{Fn("zones")}.xml"] = x.Append("</macros>\n").ToString();
 
         // ---- index/macros.xml: where the game finds the macros ----
-        var dir = $"extensions\\{p.ModId}\\maps\\{galaxy}\\";
-        files["index/macros.xml"] = Head + $"<index>\n  <entry name=\"{galaxy}_macro\" value=\"{dir}galaxy\" />\n  <entry name=\"{p.Prefix}_cl_*\" value=\"{dir}clusters\" />\n  <entry name=\"{p.Prefix}_se_*\" value=\"{dir}sectors\" />\n  <entry name=\"{p.Prefix}_zo_*\" value=\"{dir}zones\" />\n</index>\n";
+        var dir = $"extensions\\{p.ModId}\\maps\\{folder}\\";
+        files["index/macros.xml"] = Head + "<index>\n" + (patch ? "" : $"  <entry name=\"{galaxy}_macro\" value=\"{dir}galaxy\" />\n")
+            + $"  <entry name=\"{p.Prefix}_cl_*\" value=\"{dir}{Fn("clusters")}\" />\n  <entry name=\"{p.Prefix}_se_*\" value=\"{dir}{Fn("sectors")}\" />\n  <entry name=\"{p.Prefix}_zo_*\" value=\"{dir}{Fn("zones")}\" />\n</index>\n";
 
         // ---- libraries/mapdefaults.xml: names, music, sunlight, resources ----
         x = new StringBuilder(Head).Append("<diff>\n  <add sel=\"/defaults\">\n");
         foreach (var c in p.Clusters)
         {
-            x.Append($"    <dataset macro=\"{n.Cluster(c)}_macro\">\n      <properties>\n        <identification name=\"{T(1000 + c.Id * 2, c.Name)}\" description=\"{T(1001 + c.Id * 2, c.Desc)}\" image=\"enc_cluster01\" />\n");
+            x.Append($"    <dataset macro=\"{n.Cluster(c)}_macro\">\n      <properties>\n        <identification name=\"{Name(1000 + c.Id * 2, c.Name, c.NameRef)}\" description=\"{T(1001 + c.Id * 2, c.Desc)}\" image=\"enc_cluster01\" />\n");
             if (c.Music != "") x.Append($"        <sounds>\n          <music ref=\"{Xa(c.Music)}\" />\n        </sounds>\n");
             x.Append("        <system />\n      </properties>\n    </dataset>\n");
             foreach (var s in c.Sectors)
             {
-                x.Append($"    <dataset macro=\"{n.Sector(c, s)}_macro\">\n      <properties>\n        <identification name=\"{T(1000 + s.Id * 2, s.Name)}\" description=\"{T(1001 + s.Id * 2, s.Desc)}\" />\n");
+                x.Append($"    <dataset macro=\"{n.Sector(c, s)}_macro\">\n      <properties>\n        <identification name=\"{Name(1000 + s.Id * 2, s.Name, s.NameRef)}\" description=\"{T(1001 + s.Id * 2, s.Desc)}\" />\n");
                 if (s.Res.Count > 0)
                     x.Append("        <resourceareas>\n")
                      .Append(string.Concat(s.Res.Select(r => $"          <resourcearea amount=\"{r.Amount}\" ref=\"sphere_{r.Size}_{r.Ware}_{r.Yield}_{r.Speed}\" />\n")))
                      .Append("        </resourceareas>\n");
-                x.Append($"        <area sunlight=\"{Num(s.Sunlight)}\" economy=\"{Num(s.Economy)}\" security=\"{Num(s.Security)}\" />\n      </properties>\n    </dataset>\n");
+                // AI: tags (anarchy, allowrandomanomaly ...) and factionlogic="false" (no faction claims / invades it while ownerless)
+                var ai = s.Ai;
+                var tags = ai != null && ai.Tags.Count > 0 ? $" tags=\"{Xa(string.Join(" ", ai.Tags.Distinct()))}\"" : "";
+                var logic = ai is { FactionLogic: false } ? " factionlogic=\"false\"" : "";
+                x.Append($"        <area sunlight=\"{Num(s.Sunlight)}\" economy=\"{Num(s.Economy)}\" security=\"{Num(s.Security)}\"{tags}{logic} />\n      </properties>\n    </dataset>\n");
             }
         }
         files["libraries/mapdefaults.xml"] = x.Append("  </add>\n</diff>\n").ToString();
 
         // ---- libraries/god.xml: stations (carried along for the population editor) ----
         var stn = new StringBuilder(); var prod = new StringBuilder();
+        var godStations = new List<string>(); var godFactories = new List<string>();    // ids, for running games (patch)
         foreach (var (c, s) in all)
+        {
+            // ---- sector AI: the owner's claim station, a pirate station (positions: away from gates and objects)
+            if (s.Ai is { } ai)
+            {
+                var spots = GalaxyOps.AiSpots(s);
+                if (ai.Owner != null)
+                {
+                    var f = o.Factions?.Get(ai.Owner);
+                    var race = f?.Race ?? (GalaxyFacts.Factions.TryGetValue(ai.Owner, out var gf) ? gf.Race : "argon");
+                    var tag = f?.ClaimTag ?? "defence";
+                    if (f != null && f.Source != "base") extraDeps.Add(f.Source);
+                    var id = n.OwnerStation(s);
+                    stn.Append($"    <!-- {Xa(s.Name)}: owner at game start (a claiming station makes the sector theirs) -->\n");
+                    stn.Append(GodStation(id, race, ai.Owner, ai.Owner == "xenon" ? "defence" : "factory", tag, n.Sector(c, s), spots.Owner));
+                    godStations.Add(id);
+                }
+                if (ai.PirateStation != null && ai.PirateFaction != null)
+                {
+                    var f = o.Factions?.Get(ai.PirateFaction);
+                    var st = o.Factions?.Stations.FirstOrDefault(t => t.Id == ai.PirateStation && t.Faction.Equals(ai.PirateFaction, StringComparison.OrdinalIgnoreCase));
+                    if (f != null && f.Source != "base") extraDeps.Add(f.Source);
+                    if (st != null && st.Source != "base") extraDeps.Add(st.Source);
+                    var id = n.PirateStation(s);
+                    stn.Append($"    <!-- {Xa(s.Name)}: pirate station (claims nothing) -->\n");
+                    stn.Append(GodStation(id, f?.Race ?? "argon", ai.PirateFaction, "piratebase", st?.Tag ?? "piratebase", n.Sector(c, s), spots.Pirate));
+                    godStations.Add(id);
+                }
+                foreach (var ex in ai.Excluded)
+                    if (o.Factions?.Get(ex) is { } ef && ef.Source != "base") extraDeps.Add(ef.Source);
+            }
             foreach (var st in s.Stations)
             {
                 var race = GalaxyFacts.Factions.TryGetValue(st.Faction, out var f) ? f.Race : "argon";
                 var k = Kinds.TryGetValue(st.Kind, out var kk) ? kk : Kinds["tradestation"];
                 var id = $"{p.Prefix}_st_{Pad(st.Id)}";
                 var loc = $"      <quotas>\n        <quota galaxy=\"1\" />\n      </quotas>\n      <location class=\"sector\" macro=\"{n.Sector(c, s)}_macro\" />\n      <position x=\"{Num(st.X)}\" y=\"{Num(st.Y)}\" z=\"{Num(st.Z)}\" pitch=\"0\" roll=\"0\" yaw=\"0\" />\n";
+                if (st.Kind == "factory") godFactories.Add(id); else godStations.Add(id);
                 if (st.Kind == "factory")
                     prod.Append($"    <product id=\"{id}\" ware=\"{Xa(st.Ware)}\" owner=\"{Xa(st.Faction)}\" type=\"factory\">\n{loc}      <module>\n        <select ware=\"{Xa(st.Ware)}\" race=\"{race}\" />\n      </module>\n    </product>\n");
                 else
                     stn.Append($"    <station id=\"{id}\" race=\"{race}\" owner=\"{Xa(st.Faction)}\" type=\"{(st.Faction == "xenon" && st.Kind == "defence" ? "defence" : k.Type)}\">\n{loc}      <station>\n        <select faction=\"{Xa(st.Faction)}\" tags=\"[{k.Tag}]\" />\n        <loadout>\n          <level exact=\"1.0\" />\n        </loadout>\n      </station>\n    </station>\n");
             }
-        if (p.ReplaceVanillaStations)
+        }
+        if (p.ReplaceVanillaStations && !patch)
             files["libraries/god.xml"] = Head + $"<diff>\n  <replace sel=\"/god\">\n    <god>\n      <products>\n{prod}      </products>\n      <stations>\n{stn}      </stations>\n    </god>\n  </replace>\n</diff>\n";
         else if (stn.Length > 0 || prod.Length > 0)
             files["libraries/god.xml"] = Head + "<diff>\n" + (prod.Length > 0 ? $"  <add sel=\"/god/products\">\n{prod}  </add>\n" : "")
@@ -188,12 +282,15 @@ public static class ModExport
 
         // ---- md/<prefix>_galaxy.xml: objects placed at game start, anomaly pairs linked ----
         var objects = all.SelectMany(cs => cs.s.Decor.Where(d => d.Kind == "object").Select(d => (cs.c, cs.s, d))).ToList();
-        if (objects.Count > 0) files[$"md/{n.Script}.xml"] = ObjectScript(p, n, objects, o);
+        var excluded = all.Where(cs => cs.s.Ai != null).SelectMany(cs => cs.s.Ai!.Excluded.Distinct().Select(f => (f, n.Sector(cs.c, cs.s)))).ToList();
+        if (!patch) { godStations.Clear(); godFactories.Clear(); }          // a new galaxy has no running games
+        if (objects.Count > 0 || excluded.Count > 0 || godStations.Count > 0 || godFactories.Count > 0)
+            files[$"md/{n.Script}.xml"] = ObjectScript(p, n, objects, o, patch, excluded, godStations, godFactories);
 
         // ---- libraries/gamestarts.xml: one extra game start in the new galaxy (vanilla starts stay) ----
         var startC = p.StartSector is int sid ? p.ClusterOf(sid) : null;
         var start = p.SectorById(p.StartSector);
-        if (start != null && startC != null)
+        if (start != null && startC != null && !patch)                // a patch uses the game's own starts
         {
             var g = new StringBuilder(Head);
             g.Append($"<diff>\n  <add sel=\"/gamestarts\">\n    <gamestart id=\"{p.Prefix}_gamestart\" name=\"{T(100, p.ModName)}\" description=\"{T(101, "Start in " + start.Name + ", in the galaxy of " + p.ModName + ".")}\" image=\"gamestart_custom_01\" group=\"1\">\n");
@@ -210,7 +307,7 @@ public static class ModExport
         }
 
         // ---- texts (English also used for German until translated) ----
-        var page = new StringBuilder($"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<language id=\"LANG\">\n  <page id=\"{p.TextPage}\" title=\"{Xa(p.ModName)}\" descr=\"Generated by X4 Map Editor\" voice=\"no\">\n");
+        var page = new StringBuilder($"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<language id=\"LANG\">\n  <page id=\"{p.TextPage}\" title=\"{Xa(p.ModName)}\" descr=\"Generated by X4 Map Editor\" voice=\"{(p.Clusters.Any(c => c.NameRef != null || c.Sectors.Any(s => s.NameRef != null)) ? "yes" : "no")}\">\n");
         foreach (var (id, t) in texts.OrderBy(t => t.Id))
             page.Append($"    <t id=\"{id}\">{Xa(t).Replace("&quot;", "\"").Replace("(", "\\(").Replace(")", "\\)")}</t>\n");
         page.Append("  </page>\n</language>\n");
@@ -218,7 +315,7 @@ public static class ModExport
         foreach (var l in langs) files[$"t/0001-l{l:000}.xml"] = page.ToString().Replace("LANG", l.ToString(CultureInfo.InvariantCulture));
 
         // ---- content.xml ----
-        var deps = string.Concat(o.Dependencies.Where(d => d != "base").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(d => d)
+        var deps = string.Concat(o.Dependencies.Concat(extraDeps).Where(d => d != "base").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(d => d)
             .Select(d => $"  <dependency id=\"{Xa(d)}\" />\n"));
         var date = DateTime.Now.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         files["content.xml"] = $"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<content id=\"{Xa(p.ModId)}\" name=\"{Xa(p.ModName)}\" description=\"Custom galaxy made with X4 Map Editor.\" author=\"{Xa(p.Author)}\" version=\"100\" date=\"{date}\" save=\"0\" enabled=\"1\">\n"
@@ -227,52 +324,117 @@ public static class ModExport
         return files;
     }
 
+    /// <summary>One god.xml station at a fixed place in a sector: the game picks the faction's station of that tag (as vanilla).</summary>
+    static string GodStation(string id, string race, string owner, string type, string tag, string sectorMacro, (double X, double Z) at) =>
+        $"    <station id=\"{id}\" race=\"{Xa(race)}\" owner=\"{Xa(owner)}\" type=\"{type}\">\n      <quotas>\n        <quota galaxy=\"1\" />\n      </quotas>\n"
+        + $"      <location class=\"sector\" macro=\"{sectorMacro}_macro\" />\n      <position x=\"{Num(at.X)}\" y=\"0\" z=\"{Num(at.Z)}\" pitch=\"0\" roll=\"0\" yaw=\"0\" />\n"
+        + $"      <station>\n        <select faction=\"{Xa(owner)}\" tags=\"[{Xa(tag)}]\" />\n        <loadout>\n          <level exact=\"1.0\" />\n        </loadout>\n      </station>\n    </station>\n";
+
     /// <summary>The languages a text file is written for: the project's choice, all game languages when it is empty.</summary>
     public static List<int> Languages(Project p) =>
         (p.TextLanguages.Count > 0 ? p.TextLanguages : TextPages.Languages.Select(l => l.Id)).Where(l => l > 0).Distinct().OrderBy(l => l).ToList();
 
     /// <summary>
-    /// The MD script that creates the decoration objects at game start. In any other galaxy the sectors are not found
-    /// and nothing happens. Each object is kept in $Objects.{decor id} so the anomaly links can find it.
+    /// The MD script of the mod:
+    /// - creates the decoration objects at game start (in any other galaxy the sectors are not found and nothing happens);
+    ///   each object is kept in $Objects.{decor id} so the anomaly links can find it;
+    /// - sector AI: tells each faction manager which of our sectors to ignore (vanilla signal 'add_excluded_sector',
+    ///   used by the Paranid story), at game start and after every load (the manager ignores doubles);
+    /// - PATCH only: creates our god.xml stations in a running game (a save without them), as vanilla's
+    ///   Patch700ClusterStations does; global.$&lt;prefix&gt;_god remembers which ids exist, so a later export adds only the new ones.
     /// </summary>
-    static string ObjectScript(Project p, Names n, List<(Cluster c, Sector s, Decoration d)> objects, Options o)
+    static string ObjectScript(Project p, Names n, List<(Cluster c, Sector s, Decoration d)> objects, Options o, bool patch,
+        List<(string Faction, string Sector)> excluded, List<string> godStations, List<string> godFactories)
     {
         var x = new StringBuilder("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!-- Generated by X4 Map Editor. Do not edit by hand: export again instead. -->\n");
         x.Append($"<mdscript name=\"{n.ScriptName}\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:noNamespaceSchemaLocation=\"md.xsd\">\n  <cues>\n");
-        x.Append("    <!-- once per new game (md.Setup.GameStart is signalled for every game start); only our galaxy has these sectors -->\n");
-        x.Append("    <cue name=\"PlaceObjects\">\n      <conditions>\n        <event_cue_signalled cue=\"md.Setup.GameStart\" />\n      </conditions>\n      <actions>\n");
-        x.Append("        <set_value name=\"$Objects\" exact=\"table[]\" />\n");
-        foreach (var grp in objects.GroupBy(t => t.s.Id))
+        if (objects.Count > 0)
         {
-            var (c, s, _) = grp.First();
-            x.Append($"        <!-- {Xa(s.Name)} -->\n        <find_sector name=\"$Sector\" macro=\"macro.{n.Sector(c, s)}_macro\" />\n        <do_if value=\"$Sector\">\n");
-            foreach (var (_, _, d) in grp)
+            if (patch)
             {
-                var vault = o.ObjectClass(d.Ref) == "datavault";
-                x.Append($"          <create_object name=\"$Object\" macro=\"macro.{Xa(d.Ref)}\" owner=\"faction.ownerless\" sector=\"$Sector\">\n");
-                x.Append($"            <position x=\"{Num(d.X)}m\" y=\"{Num(d.Y)}m\" z=\"{Num(d.Z)}m\" />\n");
-                if (d.Yaw != 0 || d.Pitch != 0 || d.Roll != 0)
-                    x.Append($"            <rotation yaw=\"{Num(d.Yaw)}deg\" pitch=\"{Num(d.Pitch)}deg\" roll=\"{Num(d.Roll)}deg\" />\n");
-                x.Append("          </create_object>\n");
-                x.Append($"          <set_value name=\"$Objects.{{{d.Id}}}\" exact=\"$Object\" />\n");
-                if (vault)   // as vanilla Place_DataVaults: the data leak makes the vault findable and openable
-                    x.Append("          <do_if value=\"$Object\">\n            <find_signalleak_location name=\"$Slot\" container=\"$Object\" />\n"
-                        + "            <do_if value=\"$Slot\">\n              <create_signal_leak type=\"signalleaktype.data\" object=\"$Object\" slot=\"$Slot\" macro=\"macro.dataleak_xs_vault_01_macro\" />\n            </do_if>\n          </do_if>\n");
+                // a patch is also added to running games (like a DLC): run ONCE, at a new game's start or at the first load
+                // of a save without it; whichever comes first cancels the other (pattern of the DLC setup scripts)
+                x.Append("    <cue name=\"PlaceAtStart\">\n      <conditions>\n        <event_cue_signalled cue=\"md.Setup.Start\" />\n      </conditions>\n      <actions>\n        <include_actions ref=\"PlaceObjects\" />\n        <cancel_cue cue=\"PlaceOnLoad\" />\n      </actions>\n    </cue>\n");
+                x.Append("    <cue name=\"PlaceOnLoad\">\n      <conditions>\n        <event_game_loaded />\n      </conditions>\n      <actions>\n        <include_actions ref=\"PlaceObjects\" />\n        <cancel_cue cue=\"PlaceAtStart\" />\n      </actions>\n    </cue>\n");
+                x.Append("    <library name=\"PlaceObjects\">\n      <actions>\n");
             }
-            x.Append("        </do_if>\n");
+            else
+            {
+                x.Append("    <!-- once per new game (md.Setup.GameStart is signalled for every game start); only our galaxy has these sectors -->\n");
+                x.Append("    <cue name=\"PlaceObjects\">\n      <conditions>\n        <event_cue_signalled cue=\"md.Setup.GameStart\" />\n      </conditions>\n      <actions>\n");
+            }
+            x.Append("        <set_value name=\"$Objects\" exact=\"table[]\" />\n");
+            foreach (var grp in objects.GroupBy(t => t.s.Id))
+            {
+                var (c, s, _) = grp.First();
+                x.Append($"        <!-- {Xa(s.Name)} -->\n        <find_sector name=\"$Sector\" macro=\"macro.{n.Sector(c, s)}_macro\" />\n        <do_if value=\"$Sector\">\n");
+                foreach (var (_, _, d) in grp)
+                {
+                    var vault = o.ObjectClass(d.Ref) == "datavault";
+                    x.Append($"          <create_object name=\"$Object\" macro=\"macro.{Xa(d.Ref)}\" owner=\"faction.ownerless\" sector=\"$Sector\">\n");
+                    x.Append($"            <position x=\"{Num(d.X)}m\" y=\"{Num(d.Y)}m\" z=\"{Num(d.Z)}m\" />\n");
+                    if (d.Yaw != 0 || d.Pitch != 0 || d.Roll != 0)
+                        x.Append($"            <rotation yaw=\"{Num(d.Yaw)}deg\" pitch=\"{Num(d.Pitch)}deg\" roll=\"{Num(d.Roll)}deg\" />\n");
+                    x.Append("          </create_object>\n");
+                    x.Append($"          <set_value name=\"$Objects.{{{d.Id}}}\" exact=\"$Object\" />\n");
+                    if (vault)   // as vanilla Place_DataVaults: the data leak makes the vault findable and openable
+                        x.Append("          <do_if value=\"$Object\">\n            <find_signalleak_location name=\"$Slot\" container=\"$Object\" />\n"
+                            + "            <do_if value=\"$Slot\">\n              <create_signal_leak type=\"signalleaktype.data\" object=\"$Object\" slot=\"$Slot\" macro=\"macro.dataleak_xs_vault_01_macro\" />\n            </do_if>\n          </do_if>\n");
+                }
+                x.Append("        </do_if>\n");
+            }
+            // anomaly pairs: each leads to the other (vanilla Freedom's Reach does it the same way)
+            var done = new HashSet<int>();
+            foreach (var (_, _, d) in objects)
+            {
+                if (d.Link is not int l || done.Contains(d.Id) || p.DecorById(l) is not { Kind: "object" }) continue;
+                done.Add(d.Id); done.Add(l);
+                x.Append($"        <do_if value=\"$Objects.{{{d.Id}}}? and $Objects.{{{l}}}?\">\n          <do_if value=\"$Objects.{{{d.Id}}} and $Objects.{{{l}}}\">\n"
+                    + $"            <add_anomaly_destination anomaly=\"$Objects.{{{d.Id}}}\" destination=\"$Objects.{{{l}}}\" />\n"
+                    + $"            <add_anomaly_destination anomaly=\"$Objects.{{{l}}}\" destination=\"$Objects.{{{d.Id}}}\" />\n          </do_if>\n        </do_if>\n");
+            }
+            x.Append(patch ? "      </actions>\n    </library>\n" : "      </actions>\n    </cue>\n");
         }
-        // anomaly pairs: each leads to the other (vanilla Freedom's Reach does it the same way)
-        var done = new HashSet<int>();
-        foreach (var (_, _, d) in objects)
+
+        if (excluded.Count > 0)
         {
-            if (d.Link is not int l || done.Contains(d.Id) || p.DecorById(l) is not { Kind: "object" }) continue;
-            done.Add(d.Id); done.Add(l);
-            x.Append($"        <do_if value=\"$Objects.{{{d.Id}}}? and $Objects.{{{l}}}?\">\n          <do_if value=\"$Objects.{{{d.Id}}} and $Objects.{{{l}}}\">\n"
-                + $"            <add_anomaly_destination anomaly=\"$Objects.{{{d.Id}}}\" destination=\"$Objects.{{{l}}}\" />\n"
-                + $"            <add_anomaly_destination anomaly=\"$Objects.{{{l}}}\" destination=\"$Objects.{{{d.Id}}}\" />\n          </do_if>\n        </do_if>\n");
+            // the faction managers start with md.Setup.Start; 30 s later they listen (vanilla's own patch cue waits 10 s)
+            x.Append("    <!-- sector AI: factions that ignore our sectors (the manager's excluded list; doubles are ignored there) -->\n");
+            x.Append("    <cue name=\"ExcludeAtStart\">\n      <conditions>\n        <event_cue_signalled cue=\"md.Setup.Start\" />\n      </conditions>\n      <delay exact=\"30s\" />\n      <actions>\n        <include_actions ref=\"ExcludeSectors\" />\n      </actions>\n    </cue>\n");
+            x.Append("    <cue name=\"ExcludeOnLoad\" instantiate=\"true\">\n      <conditions>\n        <event_game_loaded />\n      </conditions>\n      <delay exact=\"30s\" />\n      <actions>\n        <include_actions ref=\"ExcludeSectors\" />\n      </actions>\n    </cue>\n");
+            x.Append("    <library name=\"ExcludeSectors\">\n      <actions>\n");
+            foreach (var (f, sec) in excluded)
+                x.Append($"        <signal_cue_instantly cue=\"md.FactionLogic.FactionSignalled\" param=\"[faction.{Xa(f)}, 'add_excluded_sector', macro.{sec}_macro]\" />\n");
+            x.Append("      </actions>\n    </library>\n");
         }
-        x.Append("      </actions>\n    </cue>\n  </cues>\n</mdscript>\n");
+
+        if (godStations.Count > 0 || godFactories.Count > 0)
+        {
+            var table = $"global.${p.Prefix}_god";
+            x.Append("    <!-- PATCH: a new game gets our god.xml stations from the game itself; mark them as there -->\n");
+            x.Append($"    <cue name=\"GodAtStart\">\n      <conditions>\n        <event_cue_signalled cue=\"md.Setup.Start\" />\n      </conditions>\n      <actions>\n        <set_value name=\"{table}\" exact=\"table[]\" />\n");
+            foreach (var id in godStations.Concat(godFactories)) x.Append($"        <set_value name=\"{table}.{{'{id}'}}\" exact=\"true\" />\n");
+            x.Append("      </actions>\n    </cue>\n");
+            x.Append("    <!-- PATCH: a running game (save without them, or from an older export): create the missing ones, as vanilla Patch700ClusterStations -->\n");
+            x.Append($"    <cue name=\"GodOnLoad\" instantiate=\"true\">\n      <conditions>\n        <event_game_loaded />\n      </conditions>\n      <delay exact=\"10s\" />\n      <actions>\n");
+            x.Append($"        <do_if value=\"not {table}?\">\n          <set_value name=\"{table}\" exact=\"table[]\" />\n        </do_if>\n");
+            foreach (var id in godStations)
+                x.Append($"        <do_if value=\"not {table}.{{'{id}'}}?\">\n          <create_god_station groupname=\"$Created\" id=\"'{id}'\" />\n          <set_value name=\"{table}.{{'{id}'}}\" exact=\"true\" />\n        </do_if>\n");
+            foreach (var id in godFactories)
+                x.Append($"        <do_if value=\"not {table}.{{'{id}'}}?\">\n          <create_god_factory groupname=\"$Created\" id=\"'{id}'\" />\n          <set_value name=\"{table}.{{'{id}'}}\" exact=\"true\" />\n        </do_if>\n");
+            x.Append("        <do_if value=\"$Created?\">\n          <do_for_each name=\"$Station\" in=\"$Created\">\n            <signal_objects object=\"player.galaxy\" param=\"'init station'\" param2=\"$Station\" param3=\"false\" />\n          </do_for_each>\n        </do_if>\n");
+            x.Append("      </actions>\n    </cue>\n");
+        }
+        x.Append("  </cues>\n</mdscript>\n");
         return x.ToString();
+    }
+
+    static (BaseGalaxy.ClusterInfo c, BaseGalaxy.SectorInfo s) BaseSector(BaseGalaxy b, string sectorMacro)
+    {
+        foreach (var c in b.Clusters)
+            foreach (var s in c.Sectors)
+                if (s.Macro.Equals(sectorMacro, StringComparison.OrdinalIgnoreCase)) return (c, s);
+        throw new InvalidOperationException($"Sector {sectorMacro} is not in the galaxy {b.Galaxy.Folder} (DLC or mod missing?).");
     }
 
     /// <summary>Marker file in an exported mod folder: says the editor made it and lists the files it wrote.</summary>

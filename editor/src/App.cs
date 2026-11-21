@@ -15,7 +15,7 @@ public record Selection(string Kind, int Id);
 /// <summary>
 /// Main window: top bar, galaxy map (2D) or sector view (3D), side panel, status line.
 /// Holds the project, undo / redo, selection and the open file. Every edit goes through Change().
-/// Command line for checks (after "--"): --open file.json, --sector id, --select gate:id / decor:id, --flipnormals, --debugreport (with --screenshot), --debugwindow, --setup,
+/// Command line for checks (after "--"): --open file.json, --sector id, --select gate:id / decor:id, --flipnormals, --debugreport (with --screenshot), --debugwindow, --palette group, --menu, --patch galaxymacro, --setup,
 /// --view pitch,yaw, --play musicid, --screenshot file.png.
 /// </summary>
 public partial class App : Control
@@ -26,7 +26,8 @@ public partial class App : Control
     public Project P = new();
     public Selection? Sel;
     public int? OpenSectorId;                       // null = galaxy view
-    public string Tool = "select";                  // galaxy: select / connect
+    public string Tool = "select";                  // galaxy: select / connect (connect = pick the target for ConnectFrom)
+    public int? ConnectFrom;                        // sector whose "Connect to ..." (right-click menu) waits for a target
     public GameData? Game;                          // null until the game files are read (or no settings yet)
     public X4ToGodot? Conv;
     /// <summary>Backdrops the installed game has (base + DLCs + mods), empty until the game files are read.</summary>
@@ -34,6 +35,8 @@ public partial class App : Control
     public MusicPlayer Music = null!;
     /// <summary>Decoration palette (fields + objects) and the game's texts, null until the game files are read.</summary>
     public X4Data.Space.DecorCatalog? Decor;
+    /// <summary>Factions and station types of the installed game (sector AI section); null until read.</summary>
+    public X4Data.Galaxy.FactionCatalog? Factions;
     public X4Data.Text.TextDb? Texts;
     public event Action? Changed;                   // views redraw on this
 
@@ -47,8 +50,8 @@ public partial class App : Control
     SectorView _sector = null!;
     SidePanel _side = null!;
     Label _status = null!, _crumb = null!;
-    Button _back = null!, _toolSelect = null!, _toolConnect = null!;
-    string? _screenshot; int _shotFrames = -1;
+    Button _back = null!;
+    string? _screenshot, _paletteGroup, _pendingPatch, _baseSector; bool _voiceShot; int _shotFrames = -1;
 
     public override void _Ready()
     {
@@ -77,7 +80,20 @@ public partial class App : Control
         else if (s.Problems().Count == 0 && (File.Exists(SettingsFile) || _screenshot != null)) StartGame(s);
         else ShowSetup(s);
         if (_screenshot != null) _shotFrames = 90;
-        if (Array.IndexOf(args, "--debugwindow") >= 0) CallDeferred(nameof(ShowDebug));   // screenshot check of the debug window
+        _paletteGroup = Arg("--palette");
+        if (Arg("--menupage") is { } mp) _menuPage = mp;
+        if (int.TryParse(Arg("--rightclick"), out var rc)) CallDeferred(nameof(RightClickCheck), rc);   // check runs: sector menu
+        if (Arg("--connectcheck") is { } cc && cc.Split(',') is { Length: 2 } ccp) CallDeferred(nameof(ConnectCheck), int.Parse(ccp[0]), int.Parse(ccp[1]));   // check runs: gate choice
+        if (Arg("--mapzoom") is { } mz && mz.Split(',') is { Length: 3 } mzp) CallDeferred(nameof(MapZoom), float.Parse(mzp[0]), int.Parse(mzp[1]), int.Parse(mzp[2]));   // check runs: px,q,r
+        if (Arg("--unfold") is { } uf) SidePanel.Unfold(uf.Split(','));     // check runs: side panel sections shown open                         // check runs: a page of the start menu
+        _baseSector = Arg("--basesector");                                    // check runs: open this sector of the patched galaxy read-only
+        _voiceShot = Array.IndexOf(args, "--voice") >= 0;                     // check runs: spoken-name window of the selected sector
+        if (_paletteGroup != null && _screenshot != null) _shotFrames = 900;   // pictures need time
+        // start menu, unless a check run opens something directly (--menu shows it anyway)
+        if (Array.IndexOf(args, "--menu") >= 0 || (Arg("--open") == null && Arg("--sector") == null && _screenshot == null && Array.IndexOf(args, "--setup") < 0)) ShowStartMenu();
+        if (Arg("--patch") is { } patchGalaxy) _pendingPatch = patchGalaxy;   // check runs: new patch project for this galaxy macro
+        if (Array.IndexOf(args, "--debugwindow") >= 0) CallDeferred(nameof(ShowDebug));
+        if (Array.IndexOf(args, "--clearcheck") >= 0) CallDeferred(nameof(ClearMap));        // screenshot check of the "Are you sure?" box   // screenshot check of the debug window
     }
 
     // ---------------------------------------------------------------------------------------------- layout
@@ -88,17 +104,30 @@ public partial class App : Control
 
         var top = new PanelContainer(); col.AddChild(top);
         var bar = new HBoxContainer(); bar.AddThemeConstantOverride("separation", 6); top.AddChild(bar);
-        bar.AddChild(new Label { Text = $"{AppName} {Version} " });
-        Btn(bar, "New", NewProject); Btn(bar, "Open...", OpenDialog); Btn(bar, "Save project", () => Save(false)); Btn(bar, "Save as...", () => Save(true));
+        // the app's name is in the window title only
+        Btn(bar, "Menu", ShowStartMenu, "New galaxy, new patch, open, recent projects");
+        var project = new MenuButton { Text = "Project ▾", FocusMode = FocusModeEnum.None, Flat = false, TooltipText = "Open, save, project settings" };
+        var pm = project.GetPopup();
+        pm.AddItem("Open ...", 0); pm.AddItem("Save", 1); pm.SetItemShortcut(1, Shortcut(Key.S), true); pm.AddItem("Save as ...", 2);
+        pm.AddSeparator(); pm.AddItem("Project settings ...", 3);
+        pm.IdPressed += id =>
+        {
+            switch (id)
+            {
+                case 0: OpenDialog(); break;
+                case 1: Save(false); break;
+                case 2: Save(true); break;
+                case 3: LeaveReadOnly(); Sel = null; _side.ShowProjectSettings(); break;
+            }
+        };
+        bar.AddChild(project);
         bar.AddChild(new VSeparator());
-        Btn(bar, "Undo", Undo, "Ctrl+Z"); Btn(bar, "Redo", Redo, "Ctrl+Y");
+        IconBtn(bar, SaveSvg, () => Save(false), "Save (Ctrl+S)");
+        _undoBtn = IconBtn(bar, UndoSvg, Undo, "Undo (Ctrl+Z)"); _redoBtn = IconBtn(bar, RedoSvg, Redo, "Redo (Ctrl+Y)");
         bar.AddChild(new VSeparator());
-        _toolSelect = Btn(bar, "Select / move", () => SetTool("select")); _toolSelect.ToggleMode = true;
-        _toolConnect = Btn(bar, "Connect sectors", () => SetTool("connect")); _toolConnect.ToggleMode = true;
         _back = Btn(bar, "◀ Galaxy", BackToGalaxy);
         _crumb = new Label { Modulate = new Color(1, 1, 1, 0.6f) }; bar.AddChild(_crumb);
         bar.AddChild(new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill });
-        Btn(bar, "Project settings", () => { Sel = null; _side.ShowProjectSettings(); });
         Btn(bar, "Folders...", () => ShowSetup(Settings.Load(SettingsFile)));
         Btn(bar, "Debug...", ShowDebug, "Look checks and a debug report (zip) to send with a bug report.");
         Btn(bar, "Export mod...", ExportMod, "Writes the galaxy as a mod into the export folder (Folders...), subfolder = mod folder name (Project settings).");
@@ -106,6 +135,7 @@ public partial class App : Control
         var main = new HBoxContainer { SizeFlagsVertical = SizeFlags.ExpandFill }; main.AddThemeConstantOverride("separation", 0); col.AddChild(main);
         var viewArea = new Control { SizeFlagsHorizontal = SizeFlags.ExpandFill, ClipContents = true }; main.AddChild(viewArea);
         _galaxy = new GalaxyView(this); _galaxy.SetAnchorsPreset(LayoutPreset.FullRect); viewArea.AddChild(_galaxy);
+        Previews = new Previews(this); AddChild(Previews);           // before the sector view: its palette listens to it
         _sector = new SectorView(this) { Visible = false }; _sector.SetAnchorsPreset(LayoutPreset.FullRect); viewArea.AddChild(_sector);
         var sideScroll = new ScrollContainer { CustomMinimumSize = new Vector2(350, 0), HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled };
         main.AddChild(sideScroll);
@@ -118,6 +148,24 @@ public partial class App : Control
         _status = new Label { ClipText = true, Modulate = new Color(1, 1, 1, 0.7f) }; statusBar.AddChild(_status);
     }
 
+    // Undo / redo: the usual curved arrows, drawn as SVG (no font needs to have the glyph)
+    const string UndoSvg = "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='#e6e9ee' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='M9 14 4 9l5-5'/><path d='M4 9h10.5a5.5 5.5 0 0 1 0 11H11'/></svg>";
+    const string RedoSvg = "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='#e6e9ee' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'><path d='m15 14 5-5-5-5'/><path d='M20 9H9.5a5.5 5.5 0 0 0 0 11H13'/></svg>";
+    // Save: a floppy disk; Dice: random choice (side panel)
+    const string SaveSvg = "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='#e6e9ee' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 3h11.2a2 2 0 0 1 1.4.6l2.8 2.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z'/><path d='M7 21v-7h10v7'/><path d='M7 3v4h8'/></svg>";
+    public const string DiceSvg = "<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 24 24' fill='none' stroke='#e6e9ee' stroke-width='2' stroke-linejoin='round'><rect x='3' y='3' width='18' height='18' rx='3'/><g fill='#e6e9ee' stroke='none'><circle cx='8' cy='8' r='1.6'/><circle cx='16' cy='8' r='1.6'/><circle cx='12' cy='12' r='1.6'/><circle cx='8' cy='16' r='1.6'/><circle cx='16' cy='16' r='1.6'/></g></svg>";
+    Button _undoBtn = null!, _redoBtn = null!;
+
+    /// <summary>An icon drawn from SVG text (no font needs to have the glyph).</summary>
+    public static Texture2D SvgIcon(string svg) { var img = new Image(); img.LoadSvgFromString(svg, 1f); return ImageTexture.CreateFromImage(img); }
+
+    static Button IconBtn(Container parent, string svg, Action onPress, string tip)
+    {
+        var b = new Button { Icon = SvgIcon(svg), TooltipText = tip, FocusMode = FocusModeEnum.None, Flat = true };
+        b.Pressed += onPress; parent.AddChild(b); return b;
+    }
+    static Shortcut Shortcut(Key k) => new() { Events = new Godot.Collections.Array { new InputEventKey { Keycode = k, CtrlPressed = true } } };
+
     static Button Btn(Container parent, string text, Action onPress, string tip = "")
     {
         var b = new Button { Text = text, TooltipText = tip, FocusMode = FocusModeEnum.None };
@@ -128,6 +176,7 @@ public partial class App : Control
     /// <summary>Every edit: remember the state before (undo), apply, mark unsaved, autosave, redraw.</summary>
     public void Change(Action edit)
     {
+        if (ReadOnly) { ChangeInView(edit); return; }
         _undo.Push(P.ToJson()); if (_undo.Count > 200) TrimUndo();
         _redo.Clear();
         edit();
@@ -136,8 +185,8 @@ public partial class App : Control
 
     void TrimUndo() { var keep = _undo.Take(200).Reverse().ToList(); _undo.Clear(); foreach (var k in keep) _undo.Push(k); }
 
-    void Undo() { if (_undo.Count == 0) return; _redo.Push(P.ToJson()); P = Project.FromJson(_undo.Pop()); FixSelection(); _dirty = true; Autosave(); Refresh(); }
-    void Redo() { if (_redo.Count == 0) return; _undo.Push(P.ToJson()); P = Project.FromJson(_redo.Pop()); FixSelection(); _dirty = true; Autosave(); Refresh(); }
+    void Undo() { if (_undo.Count == 0) return; if (ReadOnly) { _redo.Push(_editP!.ToJson()); _editP = Project.FromJson(_undo.Pop()); _dirty = true; Autosave(); RebuildView(); return; } _redo.Push(P.ToJson()); P = Project.FromJson(_undo.Pop()); FixSelection(); _dirty = true; Autosave(); Refresh(); }
+    void Redo() { if (_redo.Count == 0) return; if (ReadOnly) { _undo.Push(_editP!.ToJson()); _editP = Project.FromJson(_redo.Pop()); _dirty = true; Autosave(); RebuildView(); return; } _undo.Push(P.ToJson()); P = Project.FromJson(_redo.Pop()); FixSelection(); _dirty = true; Autosave(); Refresh(); }
 
     void FixSelection()
     {
@@ -154,22 +203,21 @@ public partial class App : Control
         _ => null,
     };
 
-    void Autosave() { try { File.WriteAllText(AutosaveFile, P.ToJson()); } catch { /* autosave is a convenience */ } }
+    void Autosave() { try { File.WriteAllText(AutosaveFile, EditP.ToJson()); } catch { /* autosave is a convenience */ } }
 
     public void Refresh()
     {
         bool inSector = OpenSectorId != null;
         _galaxy.Visible = !inSector; _sector.Visible = inSector;
-        _toolSelect.Visible = _toolConnect.Visible = !inSector;
-        _toolSelect.SetPressedNoSignal(Tool == "select"); _toolConnect.SetPressedNoSignal(Tool == "connect");
+        _undoBtn.Disabled = _undo.Count == 0; _redoBtn.Disabled = _redo.Count == 0;
         _back.Visible = inSector;
         var s = P.SectorById(OpenSectorId);
-        _crumb.Text = s != null ? P.ClusterOf(s.Id)!.Name + " / " + s.Name : "";
-        GetWindow().Title = (_dirty ? "* " : "") + P.ModName + $" - {AppName} {Version}" + (_file != null ? " - " + Path.GetFileName(_file) : "");
+        _crumb.Text = s != null ? P.ClusterOf(s.Id)!.Name + " / " + s.Name + (ReadOnly ? "   (read-only)" : "") : "";
+        GetWindow().Title = (_dirty ? "* " : "") + EditP.ModName + $" - {AppName} {Version}" + (_file != null ? " - " + Path.GetFileName(_file) : "");
         SetStatus((inSector
             ? "SECTOR:  WASD: fly  Q/E: down/up  Shift: faster  Right drag: turn  Middle drag: move  Wheel: zoom  F: frame  Click: select  Drag: move (Shift: height)  Arrows / rings: move / turn  Right-click: menu  R: turn  N: normal maps  Ctrl+C/X/V  Esc: galaxy"
-            : Tool == "connect" ? "GALAXY:  drag from one sector to another to create a pair of connected gates.   Esc: back to Select"
-            : "GALAXY:  double-click an empty hex: new cluster   Drag a sector: move its cluster   Double-click a sector: open it   Wheel: zoom   Right / middle drag: pan") + _gameInfo);
+            : Tool == "connect" ? "GALAXY:  click the sector to connect to (yours or one of the patched galaxy).   Esc: cancel"
+            : "GALAXY:  double-click an empty hex: new cluster   Drag a sector: move its cluster   Double-click a sector: open it   Right-click a sector: connect, open, delete   Wheel: zoom   Right / middle drag: pan") + _gameInfo);
         _side.Rebuild();
         FollowMusic();
         Changed?.Invoke();
@@ -190,13 +238,80 @@ public partial class App : Control
 
     public void SetStatus(string t) { _status.Text = t; DebugLog.Add(t); }
     string _gameInfo = "";                          // appended to the hints once the game files are read
-    public void SetTool(string t) { Tool = t; Refresh(); }
+    void RightClickCheck(int sid) => _galaxy.MenuOf(sid);
+    void MapZoom(float gs, int q, int r) => _galaxy.ZoomTo(gs, q, r);
+    void ConnectCheck(int a, int b) => _galaxy.ConnectCheck(a, b);
+    public void SetTool(string t) { Tool = t; if (t != "connect") ConnectFrom = null; Refresh(); }
+    /// <summary>Right-click menu "Connect to ...": the next click on a sector (own or of the patched galaxy) connects.</summary>
+    public void StartConnect(int sectorId) { ConnectFrom = sectorId; SetTool("connect"); }
 
     /// <summary>Camera target of the sector view in X4 metres (where new things are put).</summary>
     public (double X, double Y, double Z) SectorViewCentre() => _sector.ViewCentre();
 
-    public void OpenSector(int sid) { OpenSectorId = sid; Sel = null; Tool = "select"; Refresh(); _sector.ShowSector(); }
-    public void BackToGalaxy() { var sid = OpenSectorId; OpenSectorId = null; Sel = sid != null ? new Selection("sector", sid.Value) : null; Refresh(); }
+    /// <summary>Warning before anything from another author's mod is used (using another author's work without permission may count as stealing).</summary>
+    // ---------------------------------------------------------------------------------------------- decoration palette
+    /// <summary>Preview pictures of the palette (rendered in the background).</summary>
+    public Previews? Previews;
+    /// <summary>The palette item "in the hand": the next click into the sector places it.</summary>
+    public X4Data.Space.DecorCatalog.Item? Armed { get; private set; }
+
+    public void Arm(X4Data.Space.DecorCatalog.Item item)
+    {
+        Armed = item;
+        _sector.Palette.ShowArmed();
+        Input.SetDefaultCursorShape(Input.CursorShape.Cross);
+        SetStatus($"Click into the sector to place: {item.Label}.   Shift + click: place more.   Esc / right click: stop.");
+    }
+
+    public void Disarm()
+    {
+        if (Armed == null) return;
+        Armed = null;
+        _sector.Palette.ShowArmed();
+        Input.SetDefaultCursorShape(Input.CursorShape.Arrow);
+        SetStatus("");
+    }
+
+    /// <summary>Adds a decoration to the open sector at an X4 position (null = view centre); asks first for another author's item.</summary>
+    public void PlaceDecor(X4Data.Space.DecorCatalog.Item item, (double X, double Y, double Z)? at)
+    {
+        var s = P.SectorById(OpenSectorId);
+        if (s == null) return;
+        void Place()
+        {
+            List<string> added = new();
+            Change(() =>
+            {
+                var c = at ?? _sector.ViewCentre();
+                var d = P.AddDecor(s, item.Kind, item.Ref, c.X, c.Y, c.Z);
+                Sel = new Selection("decor", d.Id);
+                // a field with minable wares: the sector also needs resource areas of them, else it gives nothing
+                if (item.Kind == "region" && Decor?.Regions.Get(item.Ref) is { } def)
+                    added = s.AddResourcesFor(FieldWares(item.Ref), def.R);
+            });
+            if (added.Count > 0) SetStatus($"Resource areas added for {string.Join(", ", added)} (medium yield): see \"Resources\" of the sector.");
+        }
+        if (!item.Egosoft) Confirm(ForeignWarning(item.Source), Place); else Place();
+    }
+
+    /// <summary>Minable wares of a field (region definition): its asteroids, gases, scrap.</summary>
+    public IEnumerable<string> FieldWares(string regionRef) =>
+        Decor?.Regions.Get(regionRef) is { } d ? d.Wares : Enumerable.Empty<string>();
+
+    /// <summary>The checks, with the field / resource area check when the game data is read.</summary>
+    public List<string> Validate() { var o = P.Validate(Decor != null ? FieldWares : null); o.AddRange(P.ValidateAi(Factions)); return o; }
+
+    public string ForeignWarning(string folder)
+    {
+        var ext = Game?.Vfs.Extensions.All.FirstOrDefault(e => e.FolderName.Equals(folder, StringComparison.OrdinalIgnoreCase));
+        return $"This comes from the mod \"{ext?.Name ?? folder}\"{(ext != null ? $" ({ext.Id})" : "")}, not from Egosoft.\n\n"
+             + "Your galaxy will then NEED that mod: players without it see nothing there.\n"
+             + "Copying its files into your own mod without the author's permission is not allowed and can count as stealing.\n\n"
+             + "Use it anyway?";
+    }
+
+    public void OpenSector(int sid) { OpenSectorId = sid; Sel = null; Tool = "select"; ConnectFrom = null; Refresh(); _sector.ShowSector(); }
+    public void BackToGalaxy() { if (LeaveReadOnly()) return; var sid = OpenSectorId; OpenSectorId = null; Sel = sid != null ? new Selection("sector", sid.Value) : null; Refresh(); }
 
     public void DeleteSelection()
     {
@@ -209,12 +324,140 @@ public partial class App : Control
             Change(() => { P.UnlinkDecor(d); P.SectorOfDecor(d.Id)!.Decor.Remove(d); Sel = null; });
     }
 
+    // ---------------------------------------------------------------------------------------------- read-only sectors
+    Project? _editP;                                // the project while a sector of the patched galaxy is shown
+    /// <summary>A sector of the galaxy you patch is open: P is a throw-away view of it, every change is refused.</summary>
+    public bool ReadOnly => _editP != null;
+    /// <summary>The project being edited (also while a read-only sector is shown).</summary>
+    public Project EditP => _editP ?? P;
+
+    /// <summary>Shows a sector of the patched galaxy in the 3D view, read-only (BaseGalaxy.ReadOnlyView).</summary>
+    public void OpenBaseSector(BaseGalaxy.ClusterInfo c, BaseGalaxy.SectorInfo s)
+    {
+        if (Base == null) return;
+        Disarm();
+        var view = Base.ReadOnlyView(c, s, EditP);
+        _editP ??= P;
+        _roCluster = c; _roSector = s;
+        P = view;
+        OpenSectorId = view.Clusters[0].Sectors[0].Id; Sel = null; Tool = "select";
+        Refresh(); _sector.ShowSector();
+        SetStatus($"{s.Name} ({(s.Source == "base" ? "vanilla" : s.Source)}), read-only: gates, fields, resources, backdrop. Stations, wrecks and data vaults are not shown."
+            + (view.ViewBaseGates.Count > 0 ? "   Your patch's new gate CAN be moved: drag it, or select it for arrows / ring." : "") + "   Esc: back");
+    }
+
+    BaseGalaxy.ClusterInfo? _roCluster; BaseGalaxy.SectorInfo? _roSector;
+
+    /// <summary>Opens the patched sector of one of our base gates in 3D with that gate selected (to move it).</summary>
+    public void OpenBaseGate(BaseGate bg)
+    {
+        var hit = Base?.Clusters.SelectMany(c => c.Sectors.Select(s => (c, s))).FirstOrDefault(t => t.s.Macro.Equals(bg.SectorMacro, StringComparison.OrdinalIgnoreCase));
+        if (hit?.s == null) { SetStatus($"{bg.SectorName} is not shown: the galaxy you patch is not read yet."); return; }
+        OpenBaseSector(hit.Value.c, hit.Value.s);
+        var vid = P.ViewBaseGates.FirstOrDefault(kv => kv.Value == bg.Id).Key;
+        if (vid != 0) { Sel = new Selection("gate", vid); Refresh(); }
+    }
+
+    /// <summary>Can this item of the open sector be moved? In a read-only sector only the new gates of our patch.</summary>
+    public bool Movable(string kind, int id) => !ReadOnly || (kind == "gate" && P.ViewBaseGates.ContainsKey(id));
+
+    /// <summary>The read-only view built again from the edited project (after a move, undo, redo); selection and camera stay.</summary>
+    void RebuildView()
+    {
+        if (!ReadOnly || Base == null || _roCluster == null || _roSector == null) return;
+        P = Base.ReadOnlyView(_roCluster, _roSector, _editP!);
+        if (Sel != null && P.GateById(Sel.Id) == null && P.DecorById(Sel.Id) == null) Sel = null;
+        Refresh();
+    }
+
+    /// <summary>
+    /// A change while a patched sector is shown: run it on the view, keep what it did to OUR new gates (position, facing:
+    /// one undo step of the project), refuse everything else. The view is then built again from the project.
+    /// </summary>
+    void ChangeInView(Action edit)
+    {
+        var before = P.ToJson();
+        edit();
+        var after = Project.FromJson(P.ToJson());
+        var orig = Project.FromJson(before);
+        var moves = new List<(int baseId, double X, double Y, double Z, double Yaw)>();
+        foreach (var (vid, bid) in P.ViewBaseGates)
+            if (after.GateById(vid) is { } g && orig.GateById(vid) is { } o)
+            {
+                if (g.X != o.X || g.Y != o.Y || g.Z != o.Z || g.Yaw != o.Yaw) moves.Add((bid, g.X, g.Y, g.Z, g.Yaw));   // copied: g is reset below
+                g.X = o.X; g.Y = o.Y; g.Z = o.Z; g.Yaw = o.Yaw;               // to see if anything ELSE changed
+            }
+        bool other = after.ToJson() != before;
+        if (moves.Count > 0)
+        {
+            _undo.Push(_editP!.ToJson()); if (_undo.Count > 200) TrimUndo();
+            _redo.Clear();
+            foreach (var (bid, x, y, z, yaw) in moves)
+                if (_editP.BaseGateById(bid) is { } bg) { bg.X = x; bg.Y = y; bg.Z = z; bg.Yaw = GalaxyOps.NormYaw(yaw); }
+            _dirty = true; Autosave();
+        }
+        if (other) SetStatus("Read-only: this sector belongs to the galaxy you patch; only your patch's new gates can be moved. Ctrl+C copies a field to paste it into your own sector.");
+        RebuildView();
+    }
+
+    /// <summary>Back from a read-only sector to the project (galaxy view). False if none was open.</summary>
+    bool LeaveReadOnly()
+    {
+        if (_editP == null) return false;
+        P = _editP; _editP = null;
+        OpenSectorId = null; Sel = null;
+        Refresh();
+        return true;
+    }
+
+    /// <summary>The spoken-name chooser next to a cluster / sector name.</summary>
+    public void ShowVoicePicker(string? currentRef, Action<string, string?> use)
+    {
+        var w = new VoicePicker(this, currentRef, use);
+        AddChild(w);
+        w.PopupCentered();
+    }
+
+    /// <summary>
+    /// Question box with the buttons "No" (left, the default: Enter / Esc / close = No) and "Yes" (right).
+    /// The dialog's own OK button is the "No"; "Yes" is an extra button placed right of it.
+    /// </summary>
     public void Confirm(string text, Action yes, Action? no = null)
     {
-        var d = new ConfirmationDialog { DialogText = text, Title = "Please confirm" };
-        d.Confirmed += yes; d.Confirmed += d.QueueFree; d.Canceled += d.QueueFree;
-        if (no != null) d.Canceled += no;
+        var d = new AcceptDialog { DialogText = text, Title = "Please confirm", OkButtonText = "No", DialogAutowrap = true, MinSize = new Vector2I(460, 0) };
+        d.AddButton("Yes", true, "yes");
+        d.CustomAction += a => { if (a != "yes") return; d.QueueFree(); yes(); };
+        d.Confirmed += () => { d.QueueFree(); no?.Invoke(); };
+        d.Canceled += () => { d.QueueFree(); no?.Invoke(); };
         AddChild(d); d.PopupCentered();
+    }
+
+    // ---------------------------------------------------------------------------------------------- clear
+    const string Contents = "gates, fields, objects, resource areas and AI settings";
+
+    /// <summary>Sector view, right-click: empties the open sector (name and settings stay).</summary>
+    public void ClearSector(int sid)
+    {
+        if (ReadOnly || P.SectorById(sid) is not { } s) return;
+        Confirm($"This will delete all {Contents} of sector \"{s.Name}\".\nIts gate connections to other sectors are cut as well.\n\nAre you sure?",
+            () => Change(() => { P.ClearSector(P.SectorById(sid)!); Sel = null; }));
+    }
+
+    /// <summary>Galaxy, right-click: empties every sector; clusters, names and places on the map stay.</summary>
+    public void ClearAllSectors()
+    {
+        int n = P.AllSectors().Count();
+        if (n == 0) return;
+        Confirm($"This will delete all {Contents} of all {n} sectors.\nAll gate connections are gone. Clusters, names and their places on the map stay.\n\nAre you sure?",
+            () => Change(() => { foreach (var s in P.AllSectors().ToList()) P.ClearSector(s); Sel = null; }));
+    }
+
+    /// <summary>Galaxy, right-click: removes all clusters and sectors (project settings stay).</summary>
+    public void ClearMap()
+    {
+        if (P.Clusters.Count == 0) return;
+        Confirm($"This will delete all {P.Clusters.Count} clusters with all {P.AllSectors().Count()} sectors: the map is empty afterwards.\nProject settings stay.\n\nAre you sure?",
+            () => Change(() => { P.ClearMap(); Sel = null; OpenSectorId = null; }));
     }
 
     void Alert(string text) { var d = new AcceptDialog { DialogText = text, Title = AppName }; d.Confirmed += d.QueueFree; AddChild(d); d.PopupCentered(); }
@@ -222,12 +465,14 @@ public partial class App : Control
     // ---------------------------------------------------------------------------------------------- files
     void NewProject()
     {
+        LeaveReadOnly();
         void Do() { P = new Project(); _undo.Clear(); _redo.Clear(); Sel = null; OpenSectorId = null; _file = null; _dirty = false; Autosave(); _galaxy.CentreGalaxy(); Refresh(); }
         if (P.Clusters.Count == 0 || !_dirty) Do(); else Confirm("Start a new, empty galaxy? Unsaved changes are lost.", Do);
     }
 
     void OpenDialog()
     {
+        LeaveReadOnly();
         var d = new FileDialog { FileMode = FileDialog.FileModeEnum.OpenFile, Access = FileDialog.AccessEnum.Filesystem, UseNativeDialog = true, Filters = new[] { "*.json ; Galaxy project" } };
         d.FileSelected += f => { LoadFile(f); _galaxy.CentreGalaxy(); Refresh(); };
         AddChild(d); d.PopupCentered(new Vector2I(900, 600));
@@ -238,10 +483,12 @@ public partial class App : Control
         try { P = Project.FromJson(File.ReadAllText(f)); }
         catch (Exception e) { Alert(e.Message); return; }
         _file = f; _undo.Clear(); _redo.Clear(); Sel = null; OpenSectorId = null; _dirty = false; Autosave();
+        AddRecent(f); LoadBase();
     }
 
     void Save(bool ask)
     {
+        LeaveReadOnly();
         if (_file == null || ask)
         {
             var d = new FileDialog { FileMode = FileDialog.FileModeEnum.SaveFile, Access = FileDialog.AccessEnum.Filesystem, UseNativeDialog = true,
@@ -250,7 +497,7 @@ public partial class App : Control
             AddChild(d); d.PopupCentered(new Vector2I(900, 600));
             return;
         }
-        try { File.WriteAllText(_file, P.ToJson()); _dirty = false; Refresh(); SetStatus("Project saved: " + _file); }
+        try { File.WriteAllText(_file, P.ToJson()); _dirty = false; AddRecent(_file); Refresh(); SetStatus("Project saved: " + _file); }
         catch (Exception e) { Alert("Saving failed: " + e.Message); }
     }
 
@@ -261,7 +508,10 @@ public partial class App : Control
     /// </summary>
     void ExportMod()
     {
-        var issues = P.Validate();
+        LeaveReadOnly();
+        if (P.BaseGalaxy != null && Base == null)
+        { Alert("This patch adds to a galaxy that is not read yet (game files still loading, or its DLC / mod is missing)."); return; }
+        var issues = Validate();
         if (issues.Count > 0)
             Confirm("There are open checks:\n\n- " + string.Join("\n- ", issues.Take(8)) + (issues.Count > 8 ? "\n..." : "") + "\n\nExport anyway?", ExportPage);
         else ExportPage();
@@ -319,11 +569,17 @@ public partial class App : Control
         {
             ObjectClass = m => Game?.Macro(m)?.Attribute("class")?.Value,
             Dependencies = deps,
+            Base = Base,
+            Factions = Factions,
+            // the game file defining a macro, spelled as in the archive (Linux cares about upper / lower case)
+            MacroFile = m => Game?.MacroFile(m) is { } f ? Game.Vfs.Get(f)?.Path ?? f : null,
         });
         try { X4Data.Galaxy.ModExport.Write(folder, files); }
         catch (Exception e) { Alert("Export failed: " + e.Message); return; }
         SetStatus($"Exported {files.Count} files to {folder}");
-        var text = $"Exported {files.Count} files to\n{folder}\n\nIn the game: Extensions -> enable \"{P.ModName}\" -> restart -> New Game -> \"{P.ModName}\".";
+        var text = P.BaseGalaxy != null
+            ? $"Exported {files.Count} files to\n{folder}\n\nIn the game: Extensions -> enable \"{P.ModName}\" -> restart. Your sectors join the galaxy: in a new game, and (like a DLC) in a saved game when it is loaded."
+            : $"Exported {files.Count} files to\n{folder}\n\nIn the game: Extensions -> enable \"{P.ModName}\" -> restart -> New Game -> \"{P.ModName}\".";
         if (deps.Count > 0) text += "\n\nThe mod needs: " + string.Join(", ", deps) + " (written as dependencies).";
         if (Game == null) text += "\n\nThe game files were not read: DLC dependencies could not be checked.";
         if (missing.Count > 0) text += "\n\nNot found in the installed game (the game will skip them):\n- " + string.Join("\n- ", missing.Take(8));
@@ -390,6 +646,7 @@ public partial class App : Control
             Backdrops = await Task.Run(() => X4Data.Space.Backdrops.List(Game));
             Texts = await Task.Run(() => new X4Data.Text.TextDb(Game, 44));
             Decor = await Task.Run(() => new X4Data.Space.DecorCatalog(Game, Texts));
+            Factions = await Task.Run(() => new X4Data.Galaxy.FactionCatalog(Game, Texts));
             Music.SetGame(Game);
             Conv = new X4ToGodot(Game);
             if (OS.GetCmdlineUserArgs() is var a && Array.IndexOf(a, "--play") is var pi && pi >= 0 && pi + 1 < a.Length) Music.Play(a[pi + 1]);   // check of the music
@@ -397,6 +654,14 @@ public partial class App : Control
             _gameInfo = $"      |  Game files: {Game.Vfs.Count:N0} files, {Game.Vfs.Extensions.LoadOrder.Count} extensions";
             Refresh();
             if (OpenSectorId != null) _sector.ShowSector();
+            _sector.Palette.Rebuild();
+            PreloadGalaxies();
+            LoadBase();
+            ReportOpenedMod();
+            RefreshStartMenu();
+            if (_pendingPatch != null && BaseGalaxy.Installed(Game).FirstOrDefault(i => i.Macro.Equals(_pendingPatch, StringComparison.OrdinalIgnoreCase)) is { } pp)
+            { _pendingPatch = null; NewPatchProject(pp); }
+            if (_paletteGroup != null) _sector.Palette.OpenGroup(_paletteGroup);
         }
         catch (Exception e) { SetStatus("Game files could not be read: " + e.Message); }
     }
@@ -409,6 +674,7 @@ public partial class App : Control
         else if (k.CtrlPressed && k.Keycode == Key.Y) Redo();
         else if (k.CtrlPressed && k.Keycode == Key.S) Save(false);
         else if (k.Keycode == Key.Delete) DeleteSelection();
+        else if (k.Keycode == Key.Escape && Armed != null) Disarm();
         else if (k.Keycode == Key.Escape) { if (Tool != "select") SetTool("select"); else if (OpenSectorId != null) BackToGalaxy(); }
         else if (k.CtrlPressed && k.Keycode == Key.C) Copy();
         else if (k.CtrlPressed && k.Keycode == Key.X) Cut();
@@ -467,6 +733,26 @@ public partial class App : Control
     {
         if (_shotFrames < 0 || --_shotFrames > 0) return;
         if (Conv == null && _shotFrames == 0 && OpenSectorId != null) { _shotFrames = 30; return; }   // wait until game files and models are ready
+        if (_shotFrames == 0 && (_pendingPatch != null || (P.BaseGalaxy != null && Base == null))) { _shotFrames = 30; return; }   // patch: wait for the base galaxy
+        if (_shotFrames == 0 && _baseSector == "gate" && Base != null && EditP.BaseGates.FirstOrDefault(b => b.Existing == null) is { } firstNew)
+        {
+            _baseSector = null; OpenBaseGate(firstNew);
+            if (Array.IndexOf(OS.GetCmdlineUserArgs(), "--movegate") >= 0 && Sel is { } mg)   // check run: a move must stay
+                Change(() => { if (P.GateById(mg.Id) is { } g) g.X += 50_000; });
+            _shotFrames = 120; return;
+        }
+        if (_shotFrames == 0 && _baseSector != null && Base != null)
+        {
+            var hit = Base.Clusters.SelectMany(c => c.Sectors.Select(x => (c, x))).FirstOrDefault(t => t.x.Name == _baseSector);
+            _baseSector = null;
+            if (hit.x != null) { OpenBaseSector(hit.c, hit.x); _shotFrames = 120; return; }
+        }
+        if (_shotFrames == 0 && _voiceShot && Texts != null && Game != null)
+        {
+            _voiceShot = false;
+            var vs = P.SectorById(Sel?.Id) ?? P.AllSectors().FirstOrDefault();
+            if (vs != null) { ShowVoicePicker(vs.NameRef, (_, _) => { }); _shotFrames = 400; return; }
+        }
         _shotFrames = -1;
         GetViewport().GetTexture().GetImage().SavePng(_screenshot);
         GD.Print("screenshot saved: " + _screenshot);

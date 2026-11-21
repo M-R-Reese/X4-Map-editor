@@ -21,12 +21,15 @@ public sealed class DecorVisuals
 
     public DecorVisuals(App app) => _app = app;
 
+    /// <summary>For palette pictures: rocks / gas puffs scaled to the field's size, so their spread shows at 128 px.</summary>
+    public bool Preview { get; init; }
+
     public static readonly Dictionary<string, Color> CategoryColour = new()
     {
         ["Asteroid field"] = new Color("c8915a"), ["Gas cloud"] = new Color("6fa8ff"), ["Nebula"] = new Color("c77dff"),
         ["Wreck field"] = new Color("d06a4a"), ["Other"] = new Color("aaaaaa"),
     };
-    static readonly Dictionary<string, Color> WareColour = new()
+    public static readonly Dictionary<string, Color> WareColour = new()
     {
         ["ore"] = new Color("a0704a"), ["silicon"] = new Color("8a9bb0"), ["ice"] = new Color("dff2ff"), ["nividium"] = new Color("b070ff"),
         ["hydrogen"] = new Color("6fa8ff"), ["helium"] = new Color("ffb066"), ["methane"] = new Color("7fe08a"), ["rawscrap"] = new Color("c06040"),
@@ -122,7 +125,7 @@ public sealed class DecorVisuals
         }
         lines.SurfaceEnd();
         root.AddChild(new MeshInstance3D { Mesh = lines, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off });
-        if (samples.Count > 0) root.AddChild(Fill(def, samples, rnd));
+        if (samples.Count > 0) root.AddChild(Fill(def, samples, rnd, Preview));
         return root;
     }
 
@@ -130,10 +133,11 @@ public sealed class DecorVisuals
     static int Count(Regions.Def def, int cap) => (int)Math.Clamp(def.Density * 90, 60, Math.Min(cap, 600));
 
     /// <summary>Asteroid fields: small lit rocks coloured by ware; gas / nebula: big soft additive puffs; wrecks: rust boxes.</summary>
-    static MultiMeshInstance3D Fill(Regions.Def def, List<Vector3> pts, Random rnd)
+    static MultiMeshInstance3D Fill(Regions.Def def, List<Vector3> pts, Random rnd, bool preview = false)
     {
         bool rocks = def.Category is "Asteroid field" or "Wreck field";
         float size = rocks ? Math.Clamp(def.Size / 120f, 250, 2500) : Math.Clamp(def.Size / 18f, 1500, 12000);
+        if (preview) size = Math.Max(size, def.R * (rocks ? 0.035f : 0.2f));
         Mesh mesh = def.Category == "Wreck field" ? new BoxMesh { Size = Vector3.One * size }
                   : new SphereMesh { Radius = size / 2, Height = size, RadialSegments = rocks ? 7 : 12, Rings = rocks ? 4 : 6 };
         var mat = rocks
@@ -150,7 +154,7 @@ public sealed class DecorVisuals
             var basis = new Basis(new Vector3((float)rnd.NextDouble(), (float)rnd.NextDouble(), (float)rnd.NextDouble()).Normalized(), (float)rnd.NextDouble() * MathF.Tau).Scaled(Vector3.One * s);
             mm.SetInstanceTransform(i, new Transform3D(basis, pts[i]));
             var c = palette[rnd.Next(palette.Count)];
-            mm.SetInstanceColor(i, rocks ? c : new Color(c, 0.10f));
+            mm.SetInstanceColor(i, rocks ? c : new Color(c, preview ? 0.35f : 0.10f));
         }
         return new MultiMeshInstance3D { Multimesh = mm, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off };
     }

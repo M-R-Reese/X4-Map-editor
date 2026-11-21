@@ -77,6 +77,25 @@ foreach (var n in game.Notes.Take(10)) Console.WriteLine("  note: " + n);
 ModelTests.Run(game, Check);
 GalaxyTests.Run(Check);
 ExportTests.Run(game, Check);
+BaseGalaxyTests.Run(game, Check);
+AiTests.Run(game, Check);
+
+// ---- a mod opened from another folder (menu "Open a mod from another folder"): the Star Wars mod in reference\ (not installed)
+var swDir = Directory.Exists(Path.Combine(reference, "..", "reference")) ? Directory.GetDirectories(Path.GetFullPath(Path.Combine(reference, "..", "reference")), "X4 SW Interworlds*").FirstOrDefault() : null;
+var swMod = swDir != null ? Path.Combine(swDir, "starwarsmod_m1") : null;
+if (swMod != null && File.Exists(Path.Combine(swMod, "content.xml")))
+{
+    Console.WriteLine("\n--- Mod from another folder");
+    var s2 = Settings.Load(args.Length > 0 ? args[0] : "nonexistent"); s2.Guess();
+    s2.ExtraModFolders = new() { swMod };
+    var g2 = new GameData(s2);
+    var sw2 = g2.Vfs.Extensions.All.FirstOrDefault(e => e.External);
+    Console.WriteLine($"  {sw2?.Id} \"{sw2?.Name}\" enabled {sw2?.Enabled} ({sw2?.EnabledBy}); deps {string.Join(", ", sw2?.Dependencies.Select(d => d.Id + (d.Optional ? "?" : "")) ?? Array.Empty<string>())}");
+    var gal = X4Data.Galaxy.BaseGalaxy.Installed(g2);
+    foreach (var i in gal) Console.WriteLine($"  galaxy {i.Macro} {i.Folder} {i.Source}");
+    Check("mod from another folder read, switched on", sw2 != null && sw2.Enabled, sw2?.EnabledBy ?? "not found");
+    Check("its galaxy offered for a patch", gal.Any(i => i.Source.Equals(sw2?.FolderName, StringComparison.OrdinalIgnoreCase)), string.Join(", ", gal.Select(i => i.Source)));
+}
 DecorTests.Run(game, Check);
 
 Console.WriteLine(failed == 0 ? "\nALL PASSED" : $"\n{failed} FAILED");

@@ -179,3 +179,21 @@ else if (mode == "classes")
         Console.WriteLine("   " + string.Join(", ", prefixes.Select(p => $"{p.Key}* x{p.Count()}")));
     }
 }
+else if (mode == "factions")
+{
+    // factions (base + DLCs merged) with tags, station categories per faction, faction logic managers, map tags
+    var t = new X4Data.Text.TextDb(g);
+    string Tx(string? r) { var m = System.Text.RegularExpressions.Regex.Match(r ?? "", @"\{(\d+),\s*(\d+)\}"); return m.Success ? t.Get(int.Parse(m.Groups[1].Value), int.Parse(m.Groups[2].Value)) ?? r! : r ?? ""; }
+    foreach (var f in GameXml.Load(g.Vfs, "libraries/factions.xml")!.Root!.Elements("faction"))
+        Console.WriteLine($"faction {(string?)f.Attribute("id"),-18} '{Tx((string?)f.Attribute("name"))}' race={(string?)f.Attribute("primaryrace")} active={(string?)f.Attribute("active")} tags=[{(string?)f.Attribute("tags")}]");
+    foreach (var s in GameXml.Load(g.Vfs, "libraries/stations.xml")!.Root!.Elements("station"))
+        foreach (var c in s.Elements("category"))
+            Console.WriteLine($"station {(string?)s.Attribute("id"),-36} tags={(string?)c.Attribute("tags"),-22} faction={(string?)c.Attribute("faction")}");
+    var tags = new SortedDictionary<string, int>();
+    foreach (var a in GameXml.Load(g.Vfs, "libraries/mapdefaults.xml")!.Descendants("area"))
+        foreach (var x in ((string?)a.Attribute("tags") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)) tags[x] = tags.GetValueOrDefault(x) + 1;
+    Console.WriteLine("map tags: " + string.Join(", ", tags.Select(k => $"{k.Key} x{k.Value}")));
+    foreach (var f in g.Vfs.Files.Where(f => f.Path.Contains("md/factionlogic") || f.Path.Contains("md/setup_dlc")))
+        foreach (var m in System.Text.RegularExpressions.Regex.Matches(System.Text.Encoding.UTF8.GetString(f.Read()), @"name=""Faction"" value=""(faction\.\w+)""").Select(m => m.Groups[1].Value).Distinct())
+            Console.WriteLine($"manager {m} in {f.Path}");
+}

@@ -24,15 +24,23 @@ public sealed class ExtensionList
         var roots = new List<string> { Path.Combine(s.GameFolder, "extensions") };
         roots.AddRange(s.ExtraModFolders);
         foreach (var root in roots.Where(Directory.Exists))
-            foreach (var dir in Directory.GetDirectories(root).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
+        {
+            bool external = root != roots[0];
+            // an extra folder is either ONE mod (has content.xml itself) or a folder of mods (Steam Workshop, downloads)
+            var dirs = external && File.Exists(Path.Combine(root, "content.xml"))
+                ? new[] { root }
+                : Directory.GetDirectories(root).OrderBy(d => d, StringComparer.OrdinalIgnoreCase).ToArray();
+            foreach (var dir in dirs)
             {
                 Extension? ext;
                 try { ext = Extension.FromFolder(dir); }
                 catch (Exception e) { list.Notes.Add($"{dir}: content.xml not readable, skipped ({e.Message})"); continue; }
                 if (ext == null) continue;
-                if (!byId.TryAdd(ext.Id, ext)) { list.Notes.Add($"Duplicate extension id '{ext.Id}' in {dir}, skipped"); continue; }
+                if (!byId.TryAdd(ext.Id, ext)) { list.Notes.Add($"Duplicate extension id '{ext.Id}' in {dir}, skipped (the one in the game's extensions folder wins)"); continue; }
+                ext.External = external;
                 list.All.Add(ext);
             }
+        }
 
         // profile list overrides content.xml's default
         var profile = Path.Combine(s.ProfileFolder, "content.xml");
@@ -43,6 +51,9 @@ public sealed class ExtensionList
                     ext.Enabled = Extension.IsTrue((string?)e.Attribute("enabled"), true);
                     ext.EnabledBy = "profile";
                 }
+
+        // a mod opened from another folder is wanted: on, whatever the profile says
+        foreach (var ext in list.All.Where(x => x.External)) { ext.Enabled = true; ext.EnabledBy = "opened in the editor"; }
 
         // switch off what misses a required dependency; repeat until nothing changes (chains)
         bool changed = true;

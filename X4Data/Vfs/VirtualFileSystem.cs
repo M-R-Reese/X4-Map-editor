@@ -68,7 +68,14 @@ public sealed class VirtualFileSystem
         }
     }
 
-    public static string Norm(string p) => p.Replace('\\', '/').TrimStart('/');
+    /// <summary>Game path as the archives list it: forward slashes, no leading slash, no doubled slashes (some component
+    /// files write "landmarks\\landmarks_vault_01_data", all data vaults and landmarks among them; the game reads them anyway).</summary>
+    public static string Norm(string p)
+    {
+        p = p.Replace('\\', '/');
+        while (p.Contains("//")) p = p.Replace("//", "/");
+        return p.TrimStart('/');
+    }
 
     public bool Exists(string path) => _files.ContainsKey(Norm(path));
     public VfsFile? Get(string path) => _files.GetValueOrDefault(Norm(path));

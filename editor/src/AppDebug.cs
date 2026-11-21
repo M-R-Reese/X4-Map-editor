@@ -165,7 +165,7 @@ public partial class App
                 r.AppendLine($"  {(e.Enabled ? "on " : "off")} {e.Id} v{e.Version}  folder {e.FolderName}  '{e.Name}'{(e.EnabledBy != "" ? "  (" + e.EnabledBy + ")" : "")}");
         }
         r.AppendLine();
-        r.AppendLine($"Project: {P.ModName} ({P.ModId}), {P.Clusters.Count} clusters, {P.AllSectors().Count()} sectors, file {(_file != null ? Path.GetFileName(_file) : "not saved")}");
+        r.AppendLine($"Project: {EditP.ModName} ({EditP.ModId}), {EditP.Clusters.Count} clusters, {EditP.AllSectors().Count()} sectors, file {(_file != null ? Path.GetFileName(_file) : "not saved")}");
         r.AppendLine($"Open sector: {OpenSectorId?.ToString() ?? "none"}   selected: {(Sel != null ? Sel.Kind + " " + Sel.Id : "none")}");
         r.AppendLine($"Look: glow {X4Shaders.Glow}, metal {X4Shaders.Metal}, vertex colours {X4Shaders.VertexColours}, normal green flipped {X4Shaders.FlipNormalGreen}");
         Text("report.txt", r.ToString());
@@ -201,7 +201,7 @@ public partial class App
             var e = zip.CreateEntry("screenshot.jpg", CompressionLevel.NoCompression);
             using var w = e.Open(); var jpg = _debugShot.SaveJpgToBuffer(0.85f); w.Write(jpg, 0, jpg.Length);
         }
-        if (withProject) Text("project.galaxy.json", P.ToJson());
+        if (withProject) Text("project.galaxy.json", EditP.ToJson());
         DebugLog.Add("debug report written");
         return zipPath;
     }

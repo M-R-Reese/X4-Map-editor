@@ -13,7 +13,13 @@ public static class Assembly
     /// <summary>Tags of connections that carry nothing to see (game logic, collision, animation dummies).</summary>
     static readonly string[] SkipTags = { "geometryinvisible", "triggerpart" };
 
-    public static List<PlacedPart> Build(GameData g, string name, int lod, List<string> notes)
+    /// <summary>
+    /// The parts of a macro / component, and of the macros its macro file attaches at the component's connections
+    /// (e.g. a Paranid monument = top + centre + containers, each its own macro), up to 4 levels deep.
+    /// </summary>
+    public static List<PlacedPart> Build(GameData g, string name, int lod, List<string> notes) => Build(g, name, lod, notes, 0);
+
+    static List<PlacedPart> Build(GameData g, string name, int lod, List<string> notes, int depth)
     {
         var compName = g.ComponentOfMacro(name) ?? name;     // a macro points to its component; else take it as component
         var comp = g.Component(compName);
@@ -44,6 +50,21 @@ public static class Assembly
                 list.Add(new PlacedPart(part.Name, file, comp.PartTransform(part), mesh, mats));
             }
         }
+
+        // macros attached by the macro file: <connection ref="(component connection)"><macro ref="(child macro)" ... />
+        var macro = g.Macro(name);
+        if (macro != null && depth < 4)
+            foreach (var mc in macro.Element("connections")?.Elements("connection") ?? Enumerable.Empty<System.Xml.Linq.XElement>())
+            {
+                var childName = (string?)mc.Element("macro")?.Attribute("ref");
+                var at = (string?)mc.Attribute("ref");
+                if (childName == null || at == null) continue;
+                var con = comp.Connections.FirstOrDefault(c => c.Name.Equals(at, StringComparison.OrdinalIgnoreCase));
+                if (con == null || SkipTags.Any(con.HasTag)) continue;
+                var where = comp.ConnectionTransform(con);
+                foreach (var p in Build(g, childName, lod, notes, depth + 1))
+                    list.Add(p with { PartName = childName + "/" + p.PartName, Transform = p.Transform * where });
+            }
         return list;
     }
 }
