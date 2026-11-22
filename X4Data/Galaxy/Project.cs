@@ -18,6 +18,11 @@ public sealed class Project
     public int TextPage { get; set; } = 400900;
     /// <summary>Languages the export writes t/0001-lNNN.xml for (all hold the same texts). Empty = all game languages.</summary>
     public List<int> TextLanguages { get; set; } = new() { 44, 49 };
+    /// <summary>
+    /// Mods (extension folders) whose content this project may use besides Egosoft's (base game, DLCs): backdrops,
+    /// music, fields, objects, factions. A patch of a mod's galaxy may use that mod anyway. Empty = Egosoft only.
+    /// </summary>
+    public List<string> AllowedMods { get; set; } = new();
     /// <summary>PATCH project: the installed galaxy this project adds to (its macro, e.g. "XU_EP2_universe_macro"); null = own galaxy.</summary>
     public string? BaseGalaxy { get; set; }
     /// <summary>Folder of the patched galaxy under maps/ (e.g. "xu_ep2_universe") and the extension that defines it ("base" = the game).</summary>

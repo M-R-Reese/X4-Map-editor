@@ -303,7 +303,7 @@ public partial class App : Control
             });
             if (added.Count > 0) SetStatus($"Resource areas added for {string.Join(", ", added)} (medium yield): see \"Resources\" of the sector.");
         }
-        if (!item.Egosoft) Confirm(ForeignWarning(item.Source), Place); else Place();
+        if (!item.Egosoft && !Allowed(item.Source)) Confirm(ForeignWarning(item.Source), Place); else Place();
     }
 
     /// <summary>Minable wares of a field (region definition): its asteroids, gases, scrap.</summary>
@@ -382,22 +382,23 @@ public partial class App : Control
     // ---------------------------------------------------------------------------------------------- content scope
     /// <summary>
     /// May this project use content (backdrop, music, field, object, faction, station) from this source (extension
-    /// folder; "base" = the game)? Egosoft's (base game, DLCs) always. A patch of the X4 galaxy: nothing else, so a mod
-    /// opened for another project or installed in the game offers nothing there. A patch of a mod's galaxy: that mod
-    /// and the mods it depends on. An own galaxy: everything (other authors' items ask first, ForeignWarning).
+    /// folder; "base" = the game)? Egosoft's (base game, DLCs) always. Mods only when the project allows them
+    /// (Project settings, "Mods": Project.AllowedMods), and a patch of a mod's galaxy that mod; each with the mods it
+    /// depends on. So a mod opened for another project, or installed in the game, offers nothing by itself.
     /// </summary>
     public bool Allowed(string? source)
     {
-        if (source == null || source == "base" || source.StartsWith("ego_", StringComparison.OrdinalIgnoreCase)) return true;
-        var p = EditP;
-        if (p.BaseGalaxy == null) return true;
-        return ModScope(p.BaseSource).Contains(source);
+        if (IsEgosoft(source)) return true;
+        return ModScope().Contains(source!);
     }
 
-    /// <summary>The extension folders a patch may use: its galaxy's mod and that mod's dependencies (all levels).</summary>
-    HashSet<string> ModScope(string? baseSource)
+    public static bool IsEgosoft(string? source) => source == null || source == "base" || source.StartsWith("ego_", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The extension folders this project may use: its galaxy's mod (patch) and the allowed mods, with their dependencies.</summary>
+    HashSet<string> ModScope()
     {
-        if (_scopeFor == baseSource && _scope != null) return _scope;
+        var key = ContentScope;
+        if (_scopeFor == key && _scope != null) return _scope;
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var all = Game?.Vfs.Extensions.All ?? new();
         void Add(X4Data.Vfs.Extension? e)
@@ -405,14 +406,55 @@ public partial class App : Control
             if (e == null || !set.Add(e.FolderName)) return;
             foreach (var d in e.Dependencies) Add(all.FirstOrDefault(x => x.Id.Equals(d.Id, StringComparison.OrdinalIgnoreCase)));
         }
-        if (baseSource != null && baseSource != "base") Add(all.FirstOrDefault(e => e.FolderName.Equals(baseSource, StringComparison.OrdinalIgnoreCase)));
-        _scopeFor = baseSource; _scope = set;
+        var p = EditP;
+        foreach (var f in p.AllowedMods.Append(p.BaseGalaxy != null ? p.BaseSource : null))
+            if (f != null && f != "base") Add(all.FirstOrDefault(e => e.FolderName.Equals(f, StringComparison.OrdinalIgnoreCase)));
+        _scopeFor = key; _scope = set;
         return set;
     }
     string? _scopeFor; HashSet<string>? _scope;
 
-    /// <summary>Changes when the allowed content changes (another project / galaxy): the palette rebuilds itself then.</summary>
-    public string ContentScope => EditP.BaseGalaxy == null ? "own" : "patch:" + (EditP.BaseSource ?? "base") + ":" + (Decor?.Items.Count ?? 0);
+    /// <summary>Changes when the allowed content changes (another project / galaxy / allowed mods): the palette rebuilds itself then.</summary>
+    public string ContentScope => (EditP.BaseGalaxy == null ? "own" : "patch:" + (EditP.BaseSource ?? "base")) + "|" + string.Join(",", EditP.AllowedMods.OrderBy(m => m))
+                                  + "|" + (Decor?.Items.Count ?? 0) + "|" + (Game?.Vfs.Extensions.All.Count ?? 0);
+
+    /// <summary>
+    /// Mods that have something the editor offers (backdrops, music, fields, objects, factions / stations), with what:
+    /// only those are listed under Project settings, "Mods" (a script or UI mod has nothing to offer here).
+    /// </summary>
+    public Dictionary<string, List<string>> ModsWithContent()
+    {
+        var r = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        void Add(string? src, string what) { if (IsEgosoft(src)) return; if (!r.TryGetValue(src!, out var l)) r[src!] = l = new(); if (!l.Contains(what)) l.Add(what); }
+        foreach (var b in Backdrops) Add(b.Source, "backdrops");
+        foreach (var m in Music.Library?.All ?? new()) foreach (var t in m.Tracks) Add(SourceOfPath(t.File), "music");
+        foreach (var i in Decor?.Items ?? new()) Add(i.Source, i.Kind == "region" ? "fields" : i.Kind == "station" ? "stations" : "objects");
+        foreach (var f in Factions?.All.ToList() ?? new()) if (f.Active && !f.Hidden) Add(f.Source, "factions");
+        return r;
+    }
+
+    /// <summary>
+    /// Mods the project already uses (placed fields / objects, backdrops, music, factions) that it does not allow (yet):
+    /// e.g. a project made before the "Mods" setting existed. Shown in Project settings with a button to allow them.
+    /// </summary>
+    public List<string> UsedNotAllowed()
+    {
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var p = EditP;
+        foreach (var s in p.AllSectors())
+        {
+            foreach (var d in s.Decor) if (Decor?.Get(d.Kind, d.Ref)?.Source is { } src) used.Add(src);
+            foreach (var f in new[] { s.Ai?.Owner, s.Ai?.PirateFaction }.Concat(s.Stations.Select(st => st.Faction)))
+                if (f != null && Factions?.Get(f)?.Source is { } fs) used.Add(fs);
+        }
+        foreach (var c in p.Clusters)
+        {
+            if (Backdrops.FirstOrDefault(b => b.Component.Equals(c.BackdropComponent(), StringComparison.OrdinalIgnoreCase))?.Source is { } bs) used.Add(bs);
+            if (c.Music != "" && Music.Library?.Get(c.Music) is { } m && m.Tracks.Count > 0 && m.Tracks.All(t => !IsEgosoft(SourceOfPath(t.File))))
+                used.Add(SourceOfPath(m.Tracks[0].File));
+        }
+        return used.Where(u => !Allowed(u)).OrderBy(u => u).ToList();
+    }
 
     /// <summary>Decoration palette items this project may use (Allowed).</summary>
     public List<X4Data.Space.DecorCatalog.Item> DecorItems => Decor?.Items.Where(i => Allowed(i.Source)).ToList() ?? new();

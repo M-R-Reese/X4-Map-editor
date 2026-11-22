@@ -31,7 +31,11 @@ need to unpack a mod to look at it or to build a patch for it.
   3. The editor reads the game files again with the mod, as if it were switched on. The **New patch** page opens: its
      galaxy is in the list (for a full conversion, its own galaxy; for a mod that adds sectors, the X4 galaxy with them).
   4. Choose the galaxy. It is shown dimmed on the map; double-click a sector to look at it in 3D.
-- The mod's backdrops, objects and factions appear in the lists as long as its folder is listed. To get the plain
+- **Which content a project offers:** always the base game's and the DLCs'. A mod's content (backdrops, music, fields,
+  objects, factions) only when the project uses it: a patch of that mod's galaxy, or ticked under **Project settings →
+  Mods** (the list shows the mods that have such content; ticking asks first, as your galaxy will then need that mod).
+  A patch of the X4 galaxy, or a new galaxy, starts with Egosoft content only.
+- The mod stays read as long as its folder is listed. To get the plain
   game back: Menu → Mods from other folders, or **Folders...** → "Other mod folders", and remove the folder.
 - A patch for a mod (new sectors, gates into its galaxy) needs that mod: the export writes it as a dependency and copies
   none of its files.

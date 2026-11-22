@@ -409,6 +409,7 @@ public partial class SidePanel : VBoxContainer
             });
             langs.AddChild(cb);
         }
+        ModsFields();
         GameStartFields();
         SystemsFields();
         EndSection();
@@ -510,6 +511,51 @@ public partial class SidePanel : VBoxContainer
     /// Project settings, "Game start" (own galaxy only): the main options of the game's personalised start. The ship is
     /// copied with its equipment from one of the game's own starts; "personalised start" adds the game's own start editor.
     /// </summary>
+    /// <summary>
+    /// Project settings, "Mods": which mods' content (backdrops, music, fields, objects, factions) this project may use
+    /// besides Egosoft's. Ticking one asks first (the galaxy will need it; copying its files is not allowed).
+    /// </summary>
+    void ModsFields()
+    {
+        var P = _app.P;
+        Head("Mods", "Content of the base game and the DLCs is always available. Content of other mods only when ticked here: "
+            + "then the palette, the backdrop and music lists and the faction lists offer it. Your galaxy will need each mod it uses (written as a dependency).");
+        var content = _app.Game != null ? _app.ModsWithContent() : null;
+        var exts = _app.Game?.Vfs.Extensions.All.Where(e => !App.IsEgosoft(e.FolderName) && e.Enabled && content!.ContainsKey(e.FolderName))
+                       .OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        if (exts == null) { Hint("Needs the game files (\"Folders...\")."); return; }
+        if (exts.Count == 0) Hint("No mod with backdrops, music, fields, objects or factions is installed or opened (Menu → Mods from other folders).");
+        foreach (var e in exts)
+        {
+            var folder = e.FolderName;
+            bool isBase = P.BaseGalaxy != null && folder.Equals(P.BaseSource, StringComparison.OrdinalIgnoreCase);
+            var cb = new CheckBox
+            {
+                Text = e.Name, ClipText = true, TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis, CustomMinimumSize = new Vector2(300, 0),
+                ButtonPressed = isBase || P.AllowedMods.Contains(folder, StringComparer.OrdinalIgnoreCase), Disabled = isBase,
+                TooltipText = $"{e.Name} ({e.Id}), folder {folder}{(e.External ? ", opened from another folder" : "")}.\nHas: {string.Join(", ", content![folder])}.\n"
+                            + (isBase ? "Your patch adds to this mod's galaxy: its content is always available."
+                                      : "Ticked: its content is offered in this project; the mods it needs come with it."),
+            };
+            cb.Toggled += v =>
+            {
+                if (v) _app.Confirm(_app.ForeignWarning(folder), () => _app.Change(() => { if (!P.AllowedMods.Contains(folder, StringComparer.OrdinalIgnoreCase)) P.AllowedMods.Add(folder); }),
+                                    () => cb.SetPressedNoSignal(false));
+                else _app.Change(() => P.AllowedMods.RemoveAll(m => m.Equals(folder, StringComparison.OrdinalIgnoreCase)));
+            };
+            _box.AddChild(cb);
+        }
+        var used = _app.UsedNotAllowed();
+        if (used.Count > 0)
+        {
+            string Name(string f) => _app.Game?.Vfs.Extensions.All.FirstOrDefault(x => x.FolderName.Equals(f, StringComparison.OrdinalIgnoreCase))?.Name ?? f;
+            _box.AddChild(new Label { Text = "⚠ Used in this project but not ticked: " + string.Join(", ", used.Select(Name)), Modulate = new Color("ffb347"),
+                                      AutowrapMode = TextServer.AutowrapMode.WordSmart, CustomMinimumSize = new Vector2(320, 0) });
+            Button("Allow them", () => _app.Change(() => P.AllowedMods.AddRange(used.Where(u => !P.AllowedMods.Contains(u, StringComparer.OrdinalIgnoreCase)))))
+                .TooltipText = "Items placed before stay either way; ticked, their mods are offered again in the lists.";
+        }
+    }
+
     /// <summary>
     /// Project settings, "Game systems" (own galaxy only): which vanilla systems also run in this galaxy. The game starts
     /// them only in the X4 galaxy; the export adds this galaxy to their check (GalaxySystems).
