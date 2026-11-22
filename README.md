@@ -13,7 +13,7 @@ Author: M.R. Reese. Work in progress. Licence: MIT (see `LICENSE`).
 3. On the first start, check the folders the editor guessed (your X4 game folder, your profile folder) and click **Start**.
 
 You need X4: Foundations installed (Windows, Steam). New in 0.2: stations in 3D, game starts (fixed, personalised,
-creative), sector AI, and the game's faction AI and missions in an own galaxy. **Export as a mod is new and not yet
+creative), sector AI, and the game's faction AI and missions in an own galaxy. **Export as a mod is new and not yet fully
 tested in the game**: try it on a fresh save and report what you see. Feedback is welcome in the Issues.
 
 ## What it does
