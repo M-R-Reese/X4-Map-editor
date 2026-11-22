@@ -79,6 +79,7 @@ GalaxyTests.Run(Check);
 ExportTests.Run(game, Check);
 BaseGalaxyTests.Run(game, Check);
 AiTests.Run(game, Check);
+StartTests.Run(game, Check);
 
 // ---- a mod opened from another folder (menu "Open a mod from another folder"): the Star Wars mod in reference\ (not installed)
 var swDir = Directory.Exists(Path.Combine(reference, "..", "reference")) ? Directory.GetDirectories(Path.GetFullPath(Path.Combine(reference, "..", "reference")), "X4 SW Interworlds*").FirstOrDefault() : null;

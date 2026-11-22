@@ -91,12 +91,7 @@ public partial class OrbitCamera : Camera3D
         {
             if (_leftDown && (m.ButtonMask & MouseButtonMask.Left) != 0) { LeftDragged?.Invoke(m.Position, m.Relative, m.ShiftPressed); return; }
             bool pan = (m.ButtonMask & MouseButtonMask.Middle) != 0 || ((m.ButtonMask & MouseButtonMask.Right) != 0 && m.ShiftPressed);
-            if (pan)
-            {
-                float k = Distance * 0.0012f;
-                Target += (-GlobalBasis.X * m.Relative.X + GlobalBasis.Y * m.Relative.Y) * k;
-                UpdatePose();
-            }
+            if (pan) Pan(m.Relative);
             else if ((m.ButtonMask & MouseButtonMask.Right) != 0)
             {
                 _yaw -= m.Relative.X * 0.005f;
@@ -105,6 +100,14 @@ public partial class OrbitCamera : Camera3D
             }
         }
         else if (e is InputEventKey k && k.Pressed && k.Keycode == Key.F) Frame(_frameBox, _frameFactor);
+    }
+
+    /// <summary>Moves the view with the mouse (middle drag, or left drag on empty space in the sector view).</summary>
+    public void Pan(Vector2 relative)
+    {
+        float k = Distance * 0.0012f;
+        Target += (-GlobalBasis.X * relative.X + GlobalBasis.Y * relative.Y) * k;
+        UpdatePose();
     }
 
     /// <summary>Applies a changed Target / Distance.</summary>

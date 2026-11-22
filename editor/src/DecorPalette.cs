@@ -33,10 +33,10 @@ public partial class DecorPalette : HBoxContainer
     {
         ["Asteroid field"] = "Asteroid fields", ["Gas cloud"] = "Gas clouds", ["Nebula"] = "Nebulae", ["Wreck field"] = "Wreck fields",
         ["Wreck"] = "Wrecks", ["Landmark"] = "Landmarks", ["Data vault"] = "Data vaults", ["Nav beacon"] = "Beacons",
-        ["Single asteroid"] = "Asteroids", ["Anomaly"] = "Anomalies", ["Other"] = "Other fields",
+        ["Single asteroid"] = "Asteroids", ["Anomaly"] = "Anomalies", ["Other"] = "Other fields", ["Station"] = "Stations",
     };
     /// <summary>Order of the groups in the strip: fields first, then objects.</summary>
-    static readonly string[] Order = { "Asteroid field", "Gas cloud", "Nebula", "Wreck field", "Other", "Single asteroid", "Wreck", "Landmark", "Data vault", "Nav beacon", "Anomaly" };
+    static readonly string[] Order = { "Station", "Asteroid field", "Gas cloud", "Nebula", "Wreck field", "Other", "Single asteroid", "Wreck", "Landmark", "Data vault", "Nav beacon", "Anomaly" };
 
     public DecorPalette(App app) { _app = app; }
 

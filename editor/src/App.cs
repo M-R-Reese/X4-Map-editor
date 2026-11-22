@@ -37,6 +37,8 @@ public partial class App : Control
     public X4Data.Space.DecorCatalog? Decor;
     /// <summary>Factions and station types of the installed game (sector AI section); null until read.</summary>
     public X4Data.Galaxy.FactionCatalog? Factions;
+    /// <summary>The game's own starts (start ship with loadout, personalised start options); null until read.</summary>
+    public X4Data.Galaxy.StartCatalog? Starts;
     public X4Data.Text.TextDb? Texts;
     public event Action? Changed;                   // views redraw on this
 
@@ -93,6 +95,7 @@ public partial class App : Control
         if (Array.IndexOf(args, "--menu") >= 0 || (Arg("--open") == null && Arg("--sector") == null && _screenshot == null && Array.IndexOf(args, "--setup") < 0)) ShowStartMenu();
         if (Arg("--patch") is { } patchGalaxy) _pendingPatch = patchGalaxy;   // check runs: new patch project for this galaxy macro
         if (Array.IndexOf(args, "--debugwindow") >= 0) CallDeferred(nameof(ShowDebug));
+        if (Array.IndexOf(args, "--settings") >= 0) _side.ShowProjectSettings();              // screenshot check of the project settings
         if (Array.IndexOf(args, "--clearcheck") >= 0) CallDeferred(nameof(ClearMap));        // screenshot check of the "Are you sure?" box   // screenshot check of the debug window
     }
 
@@ -200,6 +203,8 @@ public partial class App : Control
         "sector" => P.SectorById(Sel.Id),
         "gate" => P.GateById(Sel.Id),
         "decor" => P.DecorById(Sel.Id),
+        "station" => P.StationById(Sel.Id),
+        "aiowner" or "aipirate" => P.SectorById(Sel.Id)?.Ai,
         _ => null,
     };
 
@@ -215,9 +220,9 @@ public partial class App : Control
         _crumb.Text = s != null ? P.ClusterOf(s.Id)!.Name + " / " + s.Name + (ReadOnly ? "   (read-only)" : "") : "";
         GetWindow().Title = (_dirty ? "* " : "") + EditP.ModName + $" - {AppName} {Version}" + (_file != null ? " - " + Path.GetFileName(_file) : "");
         SetStatus((inSector
-            ? "SECTOR:  WASD: fly  Q/E: down/up  Shift: faster  Right drag: turn  Middle drag: move  Wheel: zoom  F: frame  Click: select  Drag: move (Shift: height)  Arrows / rings: move / turn  Right-click: menu  R: turn  N: normal maps  Ctrl+C/X/V  Esc: galaxy"
+            ? "SECTOR:  WASD: fly  Q/E: down/up  Shift: faster  Right drag: turn  Left / middle drag on empty space: move the view  Wheel: zoom  F: frame  Click: select  Drag a marker: move it (Shift: height)  Del / right-click: delete  Arrows / rings: move / turn  Right-click: menu  R: turn  N: normal maps  Ctrl+C/X/V  Esc: galaxy"
             : Tool == "connect" ? "GALAXY:  click the sector to connect to (yours or one of the patched galaxy).   Esc: cancel"
-            : "GALAXY:  double-click an empty hex: new cluster   Drag a sector: move its cluster   Double-click a sector: open it   Right-click a sector: connect, open, delete   Wheel: zoom   Right / middle drag: pan") + _gameInfo);
+            : "GALAXY:  WASD: move  Q/E: zoom  Shift: faster  double-click an empty hex: new cluster   Drag a sector: move its cluster   Double-click a sector: open it   Right-click a sector: connect, open, delete   Wheel: zoom   Right / middle drag: pan") + _gameInfo);
         _side.Rebuild();
         FollowMusic();
         Changed?.Invoke();
@@ -277,6 +282,13 @@ public partial class App : Control
     {
         var s = P.SectorById(OpenSectorId);
         if (s == null) return;
+        if (item.Kind == "station")             // palette group "Stations": Ref = kind:faction:stations.xml id
+        {
+            var parts = item.Ref.Split(':');
+            var c = at ?? _sector.ViewCentre();
+            AddStation(parts[0], parts[1], parts[2] == "" ? null : parts[2], c.X, c.Z);
+            return;
+        }
         void Place()
         {
             List<string> added = new();
@@ -322,6 +334,107 @@ public partial class App : Control
             Change(() => { var gs = P.SectorOfGate(g.Id)!; P.Unlink(g); gs.Gates.Remove(g); Sel = null; });
         else if (Sel.Kind == "decor" && P.DecorById(Sel.Id) is { } d)
             Change(() => { P.UnlinkDecor(d); P.SectorOfDecor(d.Id)!.Decor.Remove(d); Sel = null; });
+        else if (Sel.Kind == "station" && P.StationById(Sel.Id) is { } st)
+            Change(() => { P.SectorOfStation(st.Id)!.Stations.Remove(st); Sel = null; });
+        // the sector AI's stations: deleting one = no owner / no pirate station (as the dropdowns of "AI and factions")
+        else if (Sel.Kind is "aiowner" or "aipirate" && P.SectorById(Sel.Id) is { Ai: { } ai } sa && Sel.Kind is var kind)
+            Change(() =>
+            {
+                if (kind == "aiowner") { ai.Owner = null; ai.OwnerAt = null; } else { ai.PirateStation = ai.PirateFaction = null; ai.PirateAt = null; }
+                if (ai.IsDefault) sa.Ai = null;
+                Sel = null;
+            });
+    }
+
+    // ---------------------------------------------------------------------------------------------- stations
+    /// <summary>A faction's name from the game files (its id until they are read).</summary>
+    public string FactionName(string id) => Factions?.Get(id)?.Name ?? id;
+    public string WareName(string id) => Factions?.WareNames.GetValueOrDefault(id) ?? id;
+
+    /// <summary>Facing of a gate, station or AI station (degrees), for the gizmo's ring.</summary>
+    public double YawOf(string kind, int id) => kind switch
+    {
+        "gate" => P.GateById(id)?.Yaw ?? 0,
+        "decor" => P.DecorById(id)?.Yaw ?? 0,
+        "station" => P.StationById(id)?.Yaw ?? 0,
+        "aiowner" => P.SectorById(id) is { } s ? GalaxyOps.AiPlaces(s).Owner.Yaw : 0,
+        "aipirate" => P.SectorById(id) is { } s2 ? GalaxyOps.AiPlaces(s2).Pirate.Yaw : 0,
+        _ => 0,
+    };
+
+    /// <summary>Inside Change(): a station / AI station moved or turned in 3D (yaw null = keep). AI stations keep the place from now on.</summary>
+    public void PlaceStation(string kind, int id, double x, double y, double z, double? yaw)
+    {
+        if (kind == "station" && P.StationById(id) is { } st) { st.X = x; st.Y = y; st.Z = z; if (yaw is { } w) st.Yaw = GalaxyOps.NormYaw(w); }
+        else if (kind is "aiowner" or "aipirate" && P.SectorById(id) is { Ai: { } ai } s)
+        {
+            var (own, pir) = GalaxyOps.AiPlaces(s);
+            var at = kind == "aiowner" ? own : pir;
+            var spot = new Spot { X = x, Y = y, Z = z, Yaw = GalaxyOps.NormYaw(yaw ?? at.Yaw) };
+            if (kind == "aiowner") ai.OwnerAt = spot; else ai.PirateAt = spot;
+        }
+    }
+
+    /// <summary>
+    /// New station in the open sector at x / z (X4 metres). Owner: the sector's owner if it has that kind, else the first
+    /// faction that has; pirate stations: the first pirate station of the game; factories: the owner's first product.
+    /// </summary>
+    /// <summary>
+    /// The palette group "Stations": one item per kind and faction that has it in the game (pirate stations: per station),
+    /// added to the decoration catalogue so the palette shows them like the decorations (picture = StationPicture).
+    /// </summary>
+    void AddStationItems()
+    {
+        if (Decor == null || Factions == null) return;
+        Decor.Items.RemoveAll(i => i.Kind == "station");
+        foreach (var (kind, label, _) in GalaxyOps.StationKinds)
+            foreach (var (faction, sref, _) in StationOwners(kind))
+            {
+                var src = Factions.Get(faction)?.Source ?? "base";
+                string what = kind != "piratebase" ? label.ToLowerInvariant()
+                    : Factions.Stations.FirstOrDefault(t => t.Id == sref)?.Tag switch { "piratedepot" => "pirate depot", "anarchyport" => "anarchy port", _ => "pirate base" };
+                Decor.Items.Add(new X4Data.Space.DecorCatalog.Item("Station", "station", $"{kind}:{faction}:{sref}", $"{FactionName(faction)} {what}", src,
+                    src == "base" || src.StartsWith("ego_", StringComparison.OrdinalIgnoreCase)));
+            }
+    }
+
+    public void AddStation(string kind, double x, double z)
+    {
+        if (ReadOnly || P.SectorById(OpenSectorId) is not { } s) return;
+        var owners = StationOwners(kind);
+        string faction = s.Ai?.Owner is { } o && owners.Any(t => t.Faction == o) ? o : owners.FirstOrDefault().Faction ?? "argon";
+        AddStation(kind, faction, kind == "piratebase" ? owners.FirstOrDefault(t => t.Faction == faction).Ref : null, x, z);
+    }
+
+    /// <summary>New station of this kind and owner in the open sector (factory: the owner's first product).</summary>
+    public void AddStation(string kind, string faction, string? sref, double x, double z)
+    {
+        if (ReadOnly || P.SectorById(OpenSectorId) is not { } s) return;
+        Change(() =>
+        {
+            var st = P.AddStation(s, kind, faction, x, z);
+            if (kind == "piratebase") st.Ref = sref;
+            if (kind == "factory") st.Ware = Factions?.ProductWares.GetValueOrDefault(faction)?.FirstOrDefault() ?? "energycells";
+            Sel = new Selection("station", st.Id);
+        });
+    }
+
+    /// <summary>
+    /// Who can own a station of this kind (from the game files): factions with a station of that tag, factions with
+    /// factories (factory), pirate stations with their faction (piratebase: Ref = stations.xml id). Game not read: the editor's list.
+    /// </summary>
+    public List<(string Faction, string? Ref, string Label)> StationOwners(string kind)
+    {
+        var fc = Factions;
+        if (fc == null) return GalaxyFacts.Factions.Keys.Select(f => (f, (string?)null, f)).ToList();
+        bool Usable(string f) => fc.Get(f) is { Active: true, Hidden: false } && f != "player";
+        if (kind == "piratebase")
+            return fc.PirateStations.Select(t => (t.Faction, (string?)t.Id, $"{FactionName(t.Faction)}: {t.Tag switch { "piratedepot" => "depot", "anarchyport" => "anarchy port", _ => "base" }} ({t.Id})")).ToList();
+        if (kind == "factory")
+            return fc.ProductWares.Keys.Where(Usable).OrderBy(FactionName).Select(f => (f, (string?)null, FactionName(f))).ToList();
+        var tag = GalaxyOps.StationKinds.First(k => k.Kind == kind).Tag;
+        return fc.Stations.Where(t => t.Tag == tag && Usable(t.Faction)).Select(t => t.Faction).Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(FactionName).Select(f => (f, (string?)null, FactionName(f))).ToList();
     }
 
     // ---------------------------------------------------------------------------------------------- read-only sectors
@@ -565,15 +678,18 @@ public partial class App : Control
             if (item != null) { if (item.Source != "base") deps.Add(IdOf(item.Source)); }
             else if (Decor != null) missing.Add($"{P.SectorOfDecor(d.Id)?.Name}: {d.Ref}");
         }
-        var files = X4Data.Galaxy.ModExport.Build(P, new X4Data.Galaxy.ModExport.Options
+        var opts = new X4Data.Galaxy.ModExport.Options
         {
             ObjectClass = m => Game?.Macro(m)?.Attribute("class")?.Value,
             Dependencies = deps,
             Base = Base,
             Factions = Factions,
+            Starts = Starts,
+            Script = f => Game == null ? null : X4Data.Xml.GameXml.Load(Game.Vfs, f),
             // the game file defining a macro, spelled as in the archive (Linux cares about upper / lower case)
             MacroFile = m => Game?.MacroFile(m) is { } f ? Game.Vfs.Get(f)?.Path ?? f : null,
-        });
+        };
+        var files = X4Data.Galaxy.ModExport.Build(P, opts);
         try { X4Data.Galaxy.ModExport.Write(folder, files); }
         catch (Exception e) { Alert("Export failed: " + e.Message); return; }
         SetStatus($"Exported {files.Count} files to {folder}");
@@ -582,6 +698,7 @@ public partial class App : Control
             : $"Exported {files.Count} files to\n{folder}\n\nIn the game: Extensions -> enable \"{P.ModName}\" -> restart -> New Game -> \"{P.ModName}\".";
         if (deps.Count > 0) text += "\n\nThe mod needs: " + string.Join(", ", deps) + " (written as dependencies).";
         if (Game == null) text += "\n\nThe game files were not read: DLC dependencies could not be checked.";
+        if (opts.Notes.Count > 0) text += "\n\nNotes:\n- " + string.Join("\n- ", opts.Notes.Take(8));
         if (missing.Count > 0) text += "\n\nNot found in the installed game (the game will skip them):\n- " + string.Join("\n- ", missing.Take(8));
         Alert(text);
     }
@@ -647,6 +764,8 @@ public partial class App : Control
             Texts = await Task.Run(() => new X4Data.Text.TextDb(Game, 44));
             Decor = await Task.Run(() => new X4Data.Space.DecorCatalog(Game, Texts));
             Factions = await Task.Run(() => new X4Data.Galaxy.FactionCatalog(Game, Texts));
+            Starts = await Task.Run(() => new X4Data.Galaxy.StartCatalog(Game, Texts));
+            AddStationItems();
             Music.SetGame(Game);
             Conv = new X4ToGodot(Game);
             if (OS.GetCmdlineUserArgs() is var a && Array.IndexOf(a, "--play") is var pi && pi >= 0 && pi + 1 < a.Length) Music.Play(a[pi + 1]);   // check of the music
@@ -689,6 +808,13 @@ public partial class App : Control
             Change(() => g.Yaw = GalaxyOps.NormYaw(g.Yaw + (k.ShiftPressed ? -15 : 15)));
         else if (k.Keycode == Key.R && Sel?.Kind == "decor" && P.DecorById(Sel.Id) is { } d)
             Change(() => d.Yaw = GalaxyOps.NormYaw(d.Yaw + (k.ShiftPressed ? -15 : 15)));
+        else if (k.Keycode == Key.R && Sel is { Kind: "station" or "aiowner" or "aipirate" } rs && OpenSectorId != null)
+        {
+            var (kind, id) = (rs.Kind, rs.Id);
+            var place = kind == "station" ? P.StationById(id) is { } st ? new Spot { X = st.X, Y = st.Y, Z = st.Z } : null
+                : P.SectorById(id) is { } sec ? (kind == "aiowner" ? GalaxyOps.AiPlaces(sec).Owner : GalaxyOps.AiPlaces(sec).Pirate) : null;
+            if (place != null) Change(() => PlaceStation(kind, id, place.X, place.Y, place.Z, YawOf(kind, id) + (k.ShiftPressed ? -15 : 15)));
+        }
         else return;
         AcceptEvent();
     }
@@ -702,11 +828,12 @@ public partial class App : Control
     {
         if (Sel?.Kind == "gate" && P.GateById(Sel.Id) is { } g) _clip = ("gate", System.Text.Json.JsonSerializer.Serialize(g));
         else if (Sel?.Kind == "decor" && P.DecorById(Sel.Id) is { } d) _clip = ("decor", System.Text.Json.JsonSerializer.Serialize(d));
+        else if (Sel?.Kind == "station" && P.StationById(Sel.Id) is { } st) _clip = ("station", System.Text.Json.JsonSerializer.Serialize(st));
         else return;
         SetStatus("Copied. Ctrl+V or right-click > Paste puts it into the open sector.");
     }
 
-    public void Cut() { if (Sel?.Kind is "gate" or "decor") { Copy(); DeleteSelection(); } }
+    public void Cut() { if (Sel?.Kind is "gate" or "decor" or "station") { Copy(); DeleteSelection(); } }
 
     /// <summary>Puts the clipboard into the open sector at x / z (X4 metres), height as copied.</summary>
     public void Paste(double x, double z)
@@ -719,6 +846,12 @@ public partial class App : Control
                 var g = System.Text.Json.JsonSerializer.Deserialize<Gate>(clip.json)!;
                 g.Id = P.NextId++; g.Link = null; g.X = Math.Round(x); g.Z = Math.Round(z);
                 s.Gates.Add(g); Sel = new Selection("gate", g.Id);
+            }
+            else if (clip.kind == "station")
+            {
+                var st = System.Text.Json.JsonSerializer.Deserialize<Station>(clip.json)!;
+                st.Id = P.NextId++; st.X = Math.Round(x); st.Z = Math.Round(z);
+                s.Stations.Add(st); Sel = new Selection("station", st.Id);
             }
             else
             {

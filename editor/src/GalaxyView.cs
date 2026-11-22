@@ -418,6 +418,34 @@ public partial class GalaxyView : Control
     }
 
     // ---------------------------------------------------------------------------------------------- mouse
+    /// <summary>
+    /// WASD moves the map (W = north / up), Q / E zoom out / in around the view centre, Shift = 4 x faster; as the
+    /// sector view's flight keys. Not while typing in a text field and not with Ctrl (Ctrl+S, Ctrl+Z are shortcuts).
+    /// </summary>
+    public override void _Process(double delta)
+    {
+        if (!IsVisibleInTree() || Input.IsKeyPressed(Key.Ctrl) || GetTree().Root.GuiGetFocusOwner() is LineEdit or TextEdit) return;
+        var move = Vector2.Zero;
+        if (Input.IsKeyPressed(Key.W)) move.Y += 1;
+        if (Input.IsKeyPressed(Key.S)) move.Y -= 1;
+        if (Input.IsKeyPressed(Key.A)) move.X += 1;
+        if (Input.IsKeyPressed(Key.D)) move.X -= 1;
+        int zoom = (Input.IsKeyPressed(Key.E) ? 1 : 0) - (Input.IsKeyPressed(Key.Q) ? 1 : 0);
+        if (move == Vector2.Zero && zoom == 0) return;
+        float fast = Input.IsKeyPressed(Key.Shift) ? 4f : 1f;
+        if (move != Vector2.Zero)
+        {
+            var step = move.Normalized() * Size.X * 0.6f * fast * (float)delta;   // the map moves under the view: W shows what lies north
+            _gx += step.X; _gy += step.Y;
+        }
+        if (zoom != 0)
+        {
+            float ns = Math.Clamp(_gs * MathF.Pow(1.8f * (fast > 1 ? 2 : 1), zoom * (float)delta), 14, 220), k = ns / _gs;
+            _gx *= k; _gy *= k; _gs = ns;                               // around the view centre (pan is relative to it)
+        }
+        QueueRedraw();
+    }
+
     public override void _GuiInput(InputEvent e)
     {
         var P = _app.P;

@@ -30,6 +30,12 @@ public static class ModExport
         public Func<string, string?> MacroFile { get; init; } = _ => null;
         /// <summary>Factions and station types of the installed game (sector AI: owner, pirates). Null = game not read: fallbacks.</summary>
         public FactionCatalog? Factions { get; init; }
+        /// <summary>The game's starts (ship with loadout, personalised start options). Null = game not read: the creative start's scout.</summary>
+        public StartCatalog? Starts { get; init; }
+        /// <summary>A game script with the DLC diffs applied (e.g. "md/factionlogic.xml"); null = not read. OWN galaxy: GalaxySystems.</summary>
+        public Func<string, System.Xml.Linq.XDocument?> Script { get; init; } = _ => null;
+        /// <summary>Filled by Build: what could not be done (shown after the export).</summary>
+        public List<string> Notes { get; } = new();
     }
 
     static readonly Dictionary<string, string> GateMacros = new()
@@ -51,6 +57,16 @@ public static class ModExport
     static string Num(double v) => Math.Round(v, 3).ToString(CultureInfo.InvariantCulture);
     static string Q(double v) => v.ToString("0.0000000000", CultureInfo.InvariantCulture);
     /// <summary>Text for an XML attribute (line breaks as the game's \n).</summary>
+    /// <summary>Every line of an XML fragment indented (copied game elements keep their own inner indentation).</summary>
+    static string Indent(string xml, string pad) => string.Concat(xml.Replace("\r", "").TrimEnd('\n').Split('\n').Select(l => pad + l + "\n"));
+
+    /// <summary>Start ship when the game files are not read: the creative start's scout with its loadout.</summary>
+    const string DefaultShip = "<ship macro=\"ship_arg_s_scout_01_a_macro\">\n  <loadout>\n    <macros>\n"
+        + "      <engine macro=\"engine_arg_s_travel_01_mk2_macro\" path=\"../con_engine_01\" />\n      <engine macro=\"engine_arg_s_travel_01_mk2_macro\" path=\"../con_engine_02\" />\n"
+        + "      <weapon macro=\"weapon_gen_s_laser_01_mk1_macro\" path=\"../con_primaryweapon_01\" optional=\"1\" />\n      <shield macro=\"shield_arg_s_standard_01_mk1_macro\" path=\"../con_shield_01\" optional=\"1\" />\n"
+        + "    </macros>\n    <software>\n      <software ware=\"software_trademk1\" />\n      <software ware=\"software_scannerlongrangemk2\" />\n    </software>\n"
+        + "    <virtualmacros>\n      <thruster macro=\"thruster_gen_s_allround_01_mk1_macro\" />\n    </virtualmacros>\n  </loadout>\n</ship>";
+
     static string Xa(string? t) => (t ?? "").Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;").Replace("\"", "&quot;")
         .Replace("\r\n", "\\n").Replace("\n", "\\n");
 
@@ -235,7 +251,7 @@ public static class ModExport
             // ---- sector AI: the owner's claim station, a pirate station (positions: away from gates and objects)
             if (s.Ai is { } ai)
             {
-                var spots = GalaxyOps.AiSpots(s);
+                var spots = GalaxyOps.AiPlaces(s);
                 if (ai.Owner != null)
                 {
                     var f = o.Factions?.Get(ai.Owner);
@@ -263,10 +279,17 @@ public static class ModExport
             }
             foreach (var st in s.Stations)
             {
-                var race = GalaxyFacts.Factions.TryGetValue(st.Faction, out var f) ? f.Race : "argon";
+                var fac = o.Factions?.Get(st.Faction);
+                var race = fac?.Race ?? (GalaxyFacts.Factions.TryGetValue(st.Faction, out var f) ? f.Race : "argon");
+                if (fac != null && fac.Source != "base") extraDeps.Add(fac.Source);
                 var k = Kinds.TryGetValue(st.Kind, out var kk) ? kk : Kinds["tradestation"];
+                if (st.Kind == "piratebase")          // the pirate station's own tag (base, depot, anarchy port ...)
+                {
+                    var pt = o.Factions?.Stations.FirstOrDefault(t => t.Id == st.Ref && t.Faction.Equals(st.Faction, StringComparison.OrdinalIgnoreCase));
+                    if (pt != null) { k = (k.Type, pt.Tag); if (pt.Source != "base") extraDeps.Add(pt.Source); }
+                }
                 var id = $"{p.Prefix}_st_{Pad(st.Id)}";
-                var loc = $"      <quotas>\n        <quota galaxy=\"1\" />\n      </quotas>\n      <location class=\"sector\" macro=\"{n.Sector(c, s)}_macro\" />\n      <position x=\"{Num(st.X)}\" y=\"{Num(st.Y)}\" z=\"{Num(st.Z)}\" pitch=\"0\" roll=\"0\" yaw=\"0\" />\n";
+                var loc = $"      <quotas>\n        <quota galaxy=\"1\" />\n      </quotas>\n      <location class=\"sector\" macro=\"{n.Sector(c, s)}_macro\" />\n      <position x=\"{Num(st.X)}\" y=\"{Num(st.Y)}\" z=\"{Num(st.Z)}\" pitch=\"0\" roll=\"0\" yaw=\"{Num(st.Yaw)}\" />\n";
                 if (st.Kind == "factory") godFactories.Add(id); else godStations.Add(id);
                 if (st.Kind == "factory")
                     prod.Append($"    <product id=\"{id}\" ware=\"{Xa(st.Ware)}\" owner=\"{Xa(st.Faction)}\" type=\"factory\">\n{loc}      <module>\n        <select ware=\"{Xa(st.Ware)}\" race=\"{race}\" />\n      </module>\n    </product>\n");
@@ -292,19 +315,59 @@ public static class ModExport
         var start = p.SectorById(p.StartSector);
         if (start != null && startC != null && !patch)                // a patch uses the game's own starts
         {
+            var gs = p.Start;
+            var shipStart = o.Starts?.Get(gs.ShipFrom) ?? o.Starts?.Get(StartCatalog.DefaultStart);
+            if (shipStart != null && shipStart.Source != "base") extraDeps.Add(shipStart.Source);
+            string startName = T(100, string.IsNullOrWhiteSpace(gs.Name) ? p.ModName : gs.Name!);
+            string startDesc = T(101, string.IsNullOrWhiteSpace(gs.Desc) ? "Start in " + start.Name + ", in the galaxy of " + p.ModName + "." : gs.Desc!);
+            string playerName = string.IsNullOrWhiteSpace(gs.PlayerName) ? "{1021,102}" : T(104, gs.PlayerName!);
+            var known = gs.Known switch { "start" => new List<(Cluster c, Sector s)> { (startC, start) }, "cluster" => startC.Sectors.Select(s => (startC, s)).ToList(), _ => all };
+            // the player block: same in both starts (the personalised start begins with these values)
+            string Player()
+            {
+                var x = new StringBuilder();
+                x.Append($"      <player macro=\"{Xa(gs.Look)}\" female=\"{(gs.Look.Contains("_f_") ? "true" : "false")}\" money=\"{Math.Max(0, gs.Money)}\" name=\"{playerName}\">\n");
+                x.Append(Indent(shipStart?.ShipXml ?? DefaultShip, "        "));
+                if (o.Starts?.Extras is { Length: > 0 } ex) x.Append(Indent(ex, "        "));
+                if (gs.Research) x.Append("        <encyclopedia>\n          <entry type=\"warebasket\" ref=\"research_gamestart_common\" />\n        </encyclopedia>\n");
+                x.Append("        <knownspace>\n");
+                foreach (var (c, s) in known) x.Append($"          <space sector=\"{n.Sector(c, s)}_macro\" />\n");
+                x.Append("        </knownspace>\n        <theme paint=\"painttheme_player_01\" />\n      </player>\n");
+                return x.ToString();
+            }
+            var location = $"      <location galaxy=\"{galaxy}_macro\" sector=\"{n.Sector(startC, start)}_macro\">\n        <position x=\"5000\" y=\"0\" z=\"5000\" />\n      </location>\n";
             var g = new StringBuilder(Head);
-            g.Append($"<diff>\n  <add sel=\"/gamestarts\">\n    <gamestart id=\"{p.Prefix}_gamestart\" name=\"{T(100, p.ModName)}\" description=\"{T(101, "Start in " + start.Name + ", in the galaxy of " + p.ModName + ".")}\" image=\"gamestart_custom_01\" group=\"1\">\n");
-            g.Append($"      <location galaxy=\"{galaxy}_macro\" sector=\"{n.Sector(startC, start)}_macro\">\n        <position x=\"5000\" y=\"0\" z=\"5000\" />\n      </location>\n");
-            g.Append("      <player macro=\"character_player_custom_f_asi_macro\" female=\"true\" money=\"100000\" name=\"{1021,102}\">\n        <ship macro=\"ship_arg_s_scout_01_a_macro\">\n          <loadout>\n            <macros>\n");
-            g.Append("              <engine macro=\"engine_arg_s_travel_01_mk2_macro\" path=\"../con_engine_01\" />\n              <engine macro=\"engine_arg_s_travel_01_mk2_macro\" path=\"../con_engine_02\" />\n");
-            g.Append("              <weapon macro=\"weapon_gen_s_laser_01_mk1_macro\" path=\"../con_primaryweapon_01\" optional=\"1\" />\n              <shield macro=\"shield_arg_s_standard_01_mk1_macro\" path=\"../con_shield_01\" optional=\"1\" />\n");
-            g.Append("            </macros>\n            <software>\n              <software ware=\"software_trademk1\" />\n              <software ware=\"software_scannerlongrangemk2\" />\n            </software>\n");
-            g.Append("            <virtualmacros>\n              <thruster macro=\"thruster_gen_s_allround_01_mk1_macro\" />\n            </virtualmacros>\n          </loadout>\n        </ship>\n");
-            g.Append("        <knownspace>\n");
-            foreach (var (c, s) in all) g.Append($"          <space sector=\"{n.Sector(c, s)}_macro\" />\n");
-            g.Append("        </knownspace>\n        <theme paint=\"painttheme_player_01\" />\n      </player>\n    </gamestart>\n  </add>\n</diff>\n");
+            g.Append($"<diff>\n  <add sel=\"/gamestarts\">\n    <gamestart id=\"{p.Prefix}_gamestart\" name=\"{startName}\" description=\"{startDesc}\" image=\"gamestart_custom_01\" group=\"1\">\n");
+            g.Append(location).Append(Player()).Append("    </gamestart>\n");
+            // personalised / creative: the game's own start editor (tags customeditor + the creative start's option list), in our
+            // galaxy. Which of the two the editor is, the game decides by the start id alone (gameoptions.lua: creative only for
+            // "custom_creative"); our creative start gets the flag from the small Lua written below (CreativeLua).
+            string baseName = string.IsNullOrWhiteSpace(gs.Name) ? p.ModName : gs.Name!;
+            void Custom(string id, string name, string desc)
+            {
+                g.Append($"    <gamestart id=\"{id}\" name=\"{name}\" description=\"{desc}\" image=\"gamestart_custom_01\" group=\"2\" tags=\"customeditor\">\n");
+                g.Append("      <type name=\"{1021,94}\" description=\"{1021,95}\" />\n");
+                g.Append(location).Append(Player());
+                g.Append("      <custom>\n").Append(string.Concat(o.Starts!.CustomItems.Select(i => "        " + i + "\n"))).Append("      </custom>\n    </gamestart>\n");
+            }
+            bool items = o.Starts is { CustomItems.Count: > 0 };
+            if (gs.Personalised && items)
+                Custom($"{p.Prefix}_gamestart_custom", T(102, baseName + ": personalised start"),
+                    T(103, "Choose your start in the galaxy of " + p.ModName + ": sector, character, ship, money, research, relations, property. With the game's limits: locked relations, own blueprints only."));
+            if (gs.Creative && items)
+            {
+                Custom(CreativeId(p), T(105, baseName + ": creative start"),
+                    T(106, "Choose your start in the galaxy of " + p.ModName + " without limits: any ship, equipment, relations and research."));
+                files["ui.xml"] = CreativeUiXml(p);
+                files[$"ui/{p.Prefix}_creative.lua"] = CreativeLua(p);
+            }
+            g.Append("  </add>\n</diff>\n");
             files["libraries/gamestarts.xml"] = g.ToString();
         }
+
+        // ---- OWN galaxy: vanilla faction AI, missions ... also run here (diffs of the game's scripts, GalaxySystems) ----
+        if (!patch)
+            foreach (var (path, text) in GalaxySystems.Diffs(p.Systems, galaxy + "_macro", o.Script, o.Notes)) files[path] = text;
 
         // ---- texts (English also used for German until translated) ----
         var page = new StringBuilder($"<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<language id=\"LANG\">\n  <page id=\"{p.TextPage}\" title=\"{Xa(p.ModName)}\" descr=\"Generated by X4 Map Editor\" voice=\"{(p.Clusters.Any(c => c.NameRef != null || c.Sectors.Any(s => s.NameRef != null)) ? "yes" : "no")}\">\n");
@@ -324,10 +387,45 @@ public static class ModExport
         return files;
     }
 
+    /// <summary>Id of the creative start (also used by the Lua that makes it creative).</summary>
+    public static string CreativeId(Project p) => $"{p.Prefix}_gamestart_creative";
+
+    static string CreativeUiXml(Project p) =>
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!-- Generated by X4 Map Editor: Lua that opens this galaxy's creative start without limits. -->\n"
+        + $"<addon name=\"{Xa(p.ModId)}\">\n  <environment type=\"menus\">\n    <file name=\"ui/{p.Prefix}_creative.lua\"/>\n"
+        + "    <!-- load after the start editor menu exists -->\n    <dependency name=\"ego_gameoptions\"/>\n  </environment>\n</addon>\n";
+
+    /// <summary>
+    /// The game opens its start editor creative (no limits) only for the start id "custom_creative" (gameoptions.lua,
+    /// parameter 5 of CustomGameMenu). This wraps the editor's onShowMenu once (shared by every galaxy made with the
+    /// editor, each adds its start id to the list) and sets that parameter for those starts; every other start is passed
+    /// on unchanged. Adds a wrapper only, no vanilla file is replaced.
+    /// </summary>
+    static string CreativeLua(Project p) =>
+        $"-- Generated by X4 Map Editor. Makes the start \"{CreativeId(p)}\" open the game's start editor in creative mode (no limits),\n"
+        + "-- as the game does for its own \"custom_creative\" (it decides by that id alone). Other starts are not touched.\n"
+        + "local startid = \"" + CreativeId(p) + "\"\n"
+        + "local function init()\n"
+        + "  for _, menu in ipairs(Menus or {}) do\n"
+        + "    if menu.name == \"CustomGameMenu\" then\n"
+        + "      if not menu.x4mapeditor_creative then\n"
+        + "        menu.x4mapeditor_creative = {}\n"
+        + "        local show = menu.onShowMenu\n"
+        + "        menu.onShowMenu = function(...)\n"
+        + "          if menu.param and menu.x4mapeditor_creative[menu.param[3]] then menu.param[5] = 1 end\n"
+        + "          return show(...)\n"
+        + "        end\n"
+        + "      end\n"
+        + "      menu.x4mapeditor_creative[startid] = true\n"
+        + "    end\n"
+        + "  end\n"
+        + "end\n"
+        + "init()\n";
+
     /// <summary>One god.xml station at a fixed place in a sector: the game picks the faction's station of that tag (as vanilla).</summary>
-    static string GodStation(string id, string race, string owner, string type, string tag, string sectorMacro, (double X, double Z) at) =>
+    static string GodStation(string id, string race, string owner, string type, string tag, string sectorMacro, Spot at) =>
         $"    <station id=\"{id}\" race=\"{Xa(race)}\" owner=\"{Xa(owner)}\" type=\"{type}\">\n      <quotas>\n        <quota galaxy=\"1\" />\n      </quotas>\n"
-        + $"      <location class=\"sector\" macro=\"{sectorMacro}_macro\" />\n      <position x=\"{Num(at.X)}\" y=\"0\" z=\"{Num(at.Z)}\" pitch=\"0\" roll=\"0\" yaw=\"0\" />\n"
+        + $"      <location class=\"sector\" macro=\"{sectorMacro}_macro\" />\n      <position x=\"{Num(at.X)}\" y=\"{Num(at.Y)}\" z=\"{Num(at.Z)}\" pitch=\"0\" roll=\"0\" yaw=\"{Num(at.Yaw)}\" />\n"
         + $"      <station>\n        <select faction=\"{Xa(owner)}\" tags=\"[{Xa(tag)}]\" />\n        <loadout>\n          <level exact=\"1.0\" />\n        </loadout>\n      </station>\n    </station>\n";
 
     /// <summary>The languages a text file is written for: the project's choice, all game languages when it is empty.</summary>

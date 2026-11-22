@@ -35,6 +35,10 @@ public sealed class FactionCatalog
     public SortedDictionary<string, int> MapTags { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>faction id -> god.xml products that may go to a sector that faction owns (class galaxy, faction list).</summary>
     public Dictionary<string, int> Products { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>ware id -> its name in the game (English text).</summary>
+    public Dictionary<string, string> WareNames { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>faction -> the wares its galaxy-wide god.xml factories make (factory stations placed by hand).</summary>
+    public Dictionary<string, SortedSet<string>> ProductWares { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>faction id -> jobs.xml ship jobs placed in sectors of that faction (class galaxy, faction list).</summary>
     public Dictionary<string, int> Jobs { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>sector tag -> god.xml products for OWNERLESS sectors with that tag (anarchy: Scale Plate drug factories).</summary>
@@ -139,8 +143,14 @@ public sealed class FactionCatalog
             if (facs.Contains("ownerless"))
                 foreach (var t in tags) (TagProducts.TryGetValue(t, out var l) ? l : TagProducts[t] = new()).Add((string?)p.Attribute("ware") ?? "?");
             else if (tags.Length == 0)                    // tagged ones only go to vanilla sectors with that tag
-                foreach (var f in facs) Products[f] = Products.GetValueOrDefault(f) + 1;
+                foreach (var f in facs)
+                {
+                    Products[f] = Products.GetValueOrDefault(f) + 1;
+                    if ((string?)p.Attribute("ware") is { } w) (ProductWares.TryGetValue(f, out var ws) ? ws : ProductWares[f] = new()).Add(w);
+                }
         }
+        foreach (var w in Root("libraries/wares.xml")?.Elements("ware") ?? Enumerable.Empty<XElement>())
+            if ((string?)w.Attribute("id") is { } wid && Tx((string?)w.Attribute("name")) is { Length: > 0 } wn && !wn.StartsWith("{")) WareNames[wid] = wn;
         foreach (var j in Root("libraries/jobs.xml")?.Elements("job") ?? Enumerable.Empty<XElement>())
         {
             var loc = j.Element("location"); if (loc == null || (string?)loc.Attribute("class") != "galaxy") continue;

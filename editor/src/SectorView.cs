@@ -143,7 +143,8 @@ public partial class SectorView : Control
         ShowBackdrop(_app.P.ClusterOf(s.Id)!.BackdropComponent(), place);
 
         Reach = Math.Max(200_000, s.Gates.Select(g => Math.Sqrt(g.X * g.X + g.Z * g.Z))
-            .Concat(s.Decor.Select(d => Math.Sqrt(d.X * d.X + d.Z * d.Z))).DefaultIfEmpty(0).Max() + 50_000);
+            .Concat(s.Decor.Select(d => Math.Sqrt(d.X * d.X + d.Z * d.Z)))
+            .Concat(s.Stations.Select(st => Math.Sqrt(st.X * st.X + st.Z * st.Z))).DefaultIfEmpty(0).Max() + 50_000);
         Ecliptic(Reach);
 
         foreach (var g in s.Gates)
@@ -164,12 +165,35 @@ public partial class SectorView : Control
             AddItem("decor", d.Id, d.X, d.Y, d.Z, node, icon, label, sel ? new Color("ffe066") : colour);
         }
 
-        // handles on the selected gate / decoration (gates turn around "up" only)
+        // stations placed by hand, and the sector AI's stations (owner's claim station, pirate station)
+        foreach (var st in s.Stations)
+        {
+            bool sel = _app.Sel is { Kind: "station" } x && x.Id == st.Id;
+            var colour = FactionColour(st.Faction);
+            AddItem("station", st.Id, st.X, st.Y, st.Z, StationBody(colour, st.Yaw), st.Kind == "piratebase" ? "☠" : "▣", StationText(st), sel ? new Color("ffe066") : colour);
+        }
+        if (s.Ai is { } ai)
+        {
+            var (own, pir) = GalaxyOps.AiPlaces(s);
+            if (ai.Owner != null)
+            {
+                bool sel = _app.Sel is { Kind: "aiowner" } x && x.Id == s.Id;
+                var colour = FactionColour(ai.Owner);
+                AddItem("aiowner", s.Id, own.X, own.Y, own.Z, StationBody(colour, own.Yaw), "◆", $"{_app.FactionName(ai.Owner)}: owner's claim station", sel ? new Color("ffe066") : colour);
+            }
+            if (ai.PirateStation != null && ai.PirateFaction != null)
+            {
+                bool sel = _app.Sel is { Kind: "aipirate" } x && x.Id == s.Id;
+                var colour = FactionColour(ai.PirateFaction);
+                AddItem("aipirate", s.Id, pir.X, pir.Y, pir.Z, StationBody(colour, pir.Yaw), "☠", $"{_app.FactionName(ai.PirateFaction)}: pirate station", sel ? new Color("ffe066") : colour);
+            }
+        }
+
+        // handles on the selected item (gates and stations turn around "up" only)
         var selItem = SelectedItem();
-        var sg = selItem?.Kind == "gate" ? _app.P.GateById(selItem.Id) : null;
         var sd = selItem?.Kind == "decor" ? _app.P.DecorById(selItem.Id) : null;
         Palette.Visible = !_app.ReadOnly;
-        _gizmo.Attach(selItem != null && _app.Movable(selItem.Kind, selItem.Id) ? selItem.Holder : null, sd != null, sg?.Yaw ?? sd?.Yaw ?? 0, sd?.Pitch ?? 0, sd?.Roll ?? 0);
+        _gizmo.Attach(selItem != null && _app.Movable(selItem.Kind, selItem.Id) ? selItem.Holder : null, sd != null, selItem != null ? _app.YawOf(selItem.Kind, selItem.Id) : 0, sd?.Pitch ?? 0, sd?.Roll ?? 0);
 
         if (_shownSector != s.Id)
         {
@@ -242,7 +266,8 @@ public partial class SectorView : Control
     void OnLeftDragged(Vector2 screen, Vector2 relative, bool shift)
     {
         if (_gizmo.Dragging != Gizmo.Handle.None) { GizmoDrag(screen); return; }
-        if (_drag == null || !_app.Movable(_drag.Kind, _drag.Id)) return;   // vanilla things of a patched sector stay put
+        if (_drag == null) { if (!_placed) _cam.Pan(relative); return; }  // left drag on empty space moves the view (as middle drag)
+        if (!_app.Movable(_drag.Kind, _drag.Id)) return;   // vanilla things of a patched sector stay put
         if (!_dragMoved && screen.DistanceTo(_dragStart) < 5) return;
         _dragMoved = true;
         var p = _drag.Holder.Position;
@@ -282,6 +307,7 @@ public partial class SectorView : Control
         {
             if (d.Kind == "gate" && _app.P.GateById(d.Id) is { } g) { g.X = x; g.Y = y; g.Z = z; }
             if (d.Kind == "decor" && _app.P.DecorById(d.Id) is { } o) { o.X = x; o.Y = y; o.Z = z; }
+            _app.PlaceStation(d.Kind, d.Id, x, y, z, null);
         });
     }
 
@@ -302,8 +328,8 @@ public partial class SectorView : Control
         else
         {
             var body = item.Holder.GetChild<Node3D>(0);                // AddItem puts the model / volume first
-            body.Basis = item.Kind == "gate" ? new Basis(Vector3.Up, -Mathf.DegToRad((float)_gizmo.Yaw)) : DecorVisuals.Rotation(_gizmo.Yaw, _gizmo.Pitch, _gizmo.Roll);
-            _app.SetStatus(item.Kind == "gate" ? $"facing {_gizmo.Yaw:0.#}°      (5° steps; Alt: free)"
+            body.Basis = item.Kind != "decor" ? new Basis(Vector3.Up, -Mathf.DegToRad((float)_gizmo.Yaw)) : DecorVisuals.Rotation(_gizmo.Yaw, _gizmo.Pitch, _gizmo.Roll);
+            _app.SetStatus(item.Kind != "decor" ? $"facing {_gizmo.Yaw:0.#}°      (5° steps; Alt: free)"
                 : $"yaw {_gizmo.Yaw:0.#}°   pitch {_gizmo.Pitch:0.#}°   roll {_gizmo.Roll:0.#}°      (5° steps; Alt: free)");
         }
     }
@@ -321,6 +347,7 @@ public partial class SectorView : Control
         {
             if (item.Kind == "gate" && _app.P.GateById(item.Id) is { } g) { g.X = x; g.Y = y; g.Z = z; g.Yaw = yaw; }
             if (item.Kind == "decor" && _app.P.DecorById(item.Id) is { } o) { o.X = x; o.Y = y; o.Z = z; o.Yaw = yaw; o.Pitch = pitch; o.Roll = roll; }
+            _app.PlaceStation(item.Kind, item.Id, x, y, z, yaw);
         });
     }
 
@@ -377,6 +404,16 @@ public partial class SectorView : Control
         else
         {
             Add("Paste here  (Ctrl+V)", () => { if (at is { } p) _app.Paste(Math.Round(p.X), Math.Round(-p.Z)); }, _app.CanPaste && at != null);
+            if (at is { } spot)
+            {
+                // a station of a kind at the clicked spot (1 km grid); owner = the sector's owner, else the first that has one
+                var sub = new PopupMenu { Name = "stations" };
+                var kinds = GalaxyOps.StationKinds;
+                for (int i = 0; i < kinds.Length; i++) sub.AddItem(kinds[i].Label, i);
+                sub.IdPressed += i => _app.AddStation(kinds[(int)i].Kind, Math.Round(spot.X / 1000) * 1000, Math.Round(-spot.Z / 1000) * 1000);
+                menu.AddChild(sub);
+                menu.AddSubmenuNodeItem("Add station here", sub);
+            }
         }
         if (_app.OpenSectorId is int open)
         {
@@ -451,6 +488,38 @@ public partial class SectorView : Control
         foreach (var t in _models.Values.Concat(_backdrops.Values)) t?.Free();
         _models.Clear(); _backdrops.Clear();
         _visuals.Free();
+    }
+
+    static Color FactionColour(string faction) =>
+        GalaxyFacts.Factions.TryGetValue(faction, out var f) ? new Color(f.Colour) : new Color("c8c8c8");
+
+    string StationText(Station st)
+    {
+        string what = st.Kind == "factory" ? "factory: " + _app.WareName(st.Ware) : GalaxyOps.StationLabel(st.Kind);
+        if (st.Kind == "piratebase" && st.Ref != null && _app.Factions?.Stations.FirstOrDefault(t => t.Id == st.Ref) is { } pt) what = pt.Tag switch
+        {
+            "piratedepot" => "pirate depot", "anarchyport" => "anarchy port", "piratedock" => "pirate dock", _ => "pirate base",
+        };
+        return $"{_app.FactionName(st.Faction)} {what}";
+    }
+
+    /// <summary>
+    /// A station marker until real station models are built: a hub with four arms (about 6 km across, the size of a mid
+    /// station) in the faction's colour, turned by its facing (one arm points where the station faces).
+    /// </summary>
+    static Node3D StationBody(Color colour, double yaw)
+    {
+        var mat = new StandardMaterial3D { AlbedoColor = colour, Metallic = 0.2f, Roughness = 0.6f, EmissionEnabled = true, Emission = colour, EmissionEnergyMultiplier = 0.45f };
+        var holder = new Node3D { Basis = new Basis(Vector3.Up, -Mathf.DegToRad((float)yaw)) };
+        holder.AddChild(new MeshInstance3D { Mesh = new CylinderMesh { TopRadius = 900, BottomRadius = 900, Height = 1600, RadialSegments = 12 }, MaterialOverride = mat });
+        for (int i = 0; i < 4; i++)
+        {
+            var arm = new MeshInstance3D { Mesh = new BoxMesh { Size = new Vector3(400, 400, i == 0 ? 3400 : 2400) }, MaterialOverride = mat };
+            arm.Basis = new Basis(Vector3.Up, i * Mathf.Pi / 2);
+            arm.Position = arm.Basis * new Vector3(0, 0, i == 0 ? -1700 : -1200);    // arm 0 (longest) = facing (north = -z in Godot)
+            holder.AddChild(arm);
+        }
+        return holder;
     }
 
     Node3D GateModel(string type)

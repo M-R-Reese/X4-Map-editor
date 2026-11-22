@@ -197,3 +197,26 @@ else if (mode == "factions")
         foreach (var m in System.Text.RegularExpressions.Regex.Matches(System.Text.Encoding.UTF8.GetString(f.Read()), @"name=""Faction"" value=""(faction\.\w+)""").Select(m => m.Groups[1].Value).Distinct())
             Console.WriteLine($"manager {m} in {f.Path}");
 }
+else if (mode == "galaxychecks")
+{
+    // every md / aiscript file (base, DLCs) that checks for the X4 galaxy, with the cue around each check
+    foreach (var f in g.Vfs.Files.Where(f => (f.Path.Contains("md/") || f.Path.Contains("aiscripts/")) && f.Path.EndsWith(".xml")).OrderBy(f => f.Path))
+    {
+        var t = System.Text.Encoding.UTF8.GetString(f.Read());
+        if (!t.Contains("xu_ep2_universe")) continue;
+        var lines = t.Split('\n'); string cue = "";
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(lines[i], @"<(cue|library|diff|add|replace) [^>]*?(name|sel)=""([^""]*)""");
+            if (m.Success) cue = m.Groups[3].Value;
+            if (lines[i].Contains("xu_ep2_universe")) Console.WriteLine($"{f.Path}:{i + 1} [{cue}] {lines[i].Trim()[..Math.Min(150, lines[i].Trim().Length)]}");
+        }
+    }
+}
+else if (mode == "showlines")
+{
+    // file, first line, count: print those lines of a game file (VFS path)
+    var lines = System.Text.Encoding.UTF8.GetString(g.Vfs.Read(args[1])).Split((char)10);
+    int from = int.Parse(args[2]), n = int.Parse(args[3]);
+    for (int i = from - 1; i < Math.Min(lines.Length, from - 1 + n); i++) Console.WriteLine($"{i + 1}: {lines[i].TrimEnd()}");
+}

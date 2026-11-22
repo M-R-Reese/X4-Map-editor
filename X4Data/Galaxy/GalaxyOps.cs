@@ -321,9 +321,35 @@ public static class GalaxyOps
     /// station on a 40 km ring, pirate station on an 80 km ring, each at the angle (15° steps) furthest from gates,
     /// placed objects and the other station. Same project = same places (export after export).
     /// </summary>
+    /// <summary>Station kinds placeable in a sector: id, label, the station tag the game selects by (null = factory, by ware).</summary>
+    public static readonly (string Kind, string Label, string? Tag)[] StationKinds =
+    {
+        ("tradestation", "Trade station", "tradestation"), ("shipyard", "Shipyard", "shipyard"), ("wharf", "Wharf", "wharf"),
+        ("equipmentdock", "Equipment dock", "equipmentdock"), ("defence", "Defence platform", "defence"), ("factory", "Factory", null),
+        ("piratebase", "Pirate station", "piratebase"),
+    };
+    public static string StationLabel(string kind) => StationKinds.FirstOrDefault(k => k.Kind == kind).Label ?? kind;
+
+    public static Station AddStation(this Project p, Sector s, string kind, string faction, double x, double z)
+    {
+        var st = new Station { Id = p.NextId++, Kind = kind, Faction = faction, X = Math.Round(x), Z = Math.Round(z) };
+        s.Stations.Add(st);
+        return st;
+    }
+    public static Station? StationById(this Project p, int? id) => id == null ? null : p.AllSectors().SelectMany(s => s.Stations).FirstOrDefault(x => x.Id == id);
+    public static Sector? SectorOfStation(this Project p, int id) => p.AllSectors().FirstOrDefault(s => s.Stations.Any(x => x.Id == id));
+
+    /// <summary>Where the sector AI's stations stand: moved by hand (OwnerAt / PirateAt) or the automatic places (AiSpots).</summary>
+    public static (Spot Owner, Spot Pirate) AiPlaces(Sector s)
+    {
+        var auto = AiSpots(s);
+        return (s.Ai?.OwnerAt ?? new Spot { X = auto.Owner.X, Z = auto.Owner.Z }, s.Ai?.PirateAt ?? new Spot { X = auto.Pirate.X, Z = auto.Pirate.Z });
+    }
+
     public static ((double X, double Z) Owner, (double X, double Z) Pirate) AiSpots(Sector s)
     {
-        var avoid = s.Gates.Select(g => (g.X, g.Z)).Concat(s.Decor.Where(d => d.Kind == "object").Select(d => (d.X, d.Z))).ToList();
+        var avoid = s.Gates.Select(g => (g.X, g.Z)).Concat(s.Decor.Where(d => d.Kind == "object").Select(d => (d.X, d.Z)))
+            .Concat(s.Stations.Select(st => (st.X, st.Z))).ToList();
         (double X, double Z) Best(double ring)
         {
             (double X, double Z) best = (0, ring); double bestD = -1;
@@ -357,6 +383,29 @@ public static class GalaxyOps
             if (ai.PirateStation != null && !fc.PirateStations.Any(t => t.Id == ai.PirateStation && t.Faction == ai.PirateFaction))
                 o.Add($"{s.Name}: pirate station \"{ai.PirateStation}\" ({ai.PirateFaction}) is not in the installed game.");
             foreach (var t in ai.Tags.Where(t => !fc.MapTags.ContainsKey(t))) o.Add($"{s.Name}: the game does not use the sector tag \"{t}\".");
+        }
+        // stations placed by hand: can the game build them? (the owner needs a station of that kind / a factory of that ware)
+        foreach (var s in p.AllSectors())
+        {
+            var claimers = s.Stations.Where(st => st.Kind is not ("factory" or "piratebase")).Select(st => st.Faction).Distinct().ToList();
+            if (s.Ai?.Owner == null && claimers.Count > 1) o.Add($"{s.Name}: stations of {claimers.Count} factions claim it: the sector would be contested.");
+            any |= s.Stations.Count > 0;
+            if (fc == null) continue;
+            foreach (var st in s.Stations)
+            {
+                var tag = StationKinds.FirstOrDefault(k => k.Kind == st.Kind).Tag;
+                string who = fc.Get(st.Faction)?.Name ?? st.Faction;
+                if (st.Kind == "piratebase")
+                {
+                    if (!fc.PirateStations.Any(t => t.Id == st.Ref && t.Faction == st.Faction)) o.Add($"{s.Name}: pirate station \"{st.Ref}\" ({who}) is not in the installed game.");
+                }
+                else if (st.Kind == "factory")
+                {
+                    if (!(fc.ProductWares.GetValueOrDefault(st.Faction)?.Contains(st.Ware) ?? false)) o.Add($"{s.Name}: {who} has no factory for {fc.WareNames.GetValueOrDefault(st.Ware, st.Ware)} in the game: nothing would be built.");
+                }
+                else if (tag != null && !fc.Stations.Any(t => t.Tag == tag && t.Faction.Equals(st.Faction, StringComparison.OrdinalIgnoreCase)))
+                    o.Add($"{s.Name}: {who} has no {StationLabel(st.Kind).ToLowerInvariant()} in the game: nothing would be built.");
+            }
         }
         // finding B of the plan: the vanilla faction AI only runs in the X4 galaxy (xu_ep2_universe) for now
         if (any && p.BaseGalaxy == null)

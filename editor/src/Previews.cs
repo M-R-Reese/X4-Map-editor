@@ -78,6 +78,7 @@ public partial class Previews : Node
     public Texture2D? Get(DecorCatalog.Item item, bool queueIfMissing = true)
     {
         var key = Key(item);
+        if (item.Kind == "station") return _loaded.TryGetValue(key, out var sp) && sp != null ? sp : _loaded[key] = StationPicture(item);   // drawn, not rendered
         if (_loaded.TryGetValue(key, out var t) && t != null) return t;
         foreach (var dir in new[] { ShippedFolder, CacheFolder })
         {
@@ -89,6 +90,31 @@ public partial class Previews : Node
         }
         if (queueIfMissing && item.Egosoft) Request(item);
         return null;
+    }
+
+    /// <summary>
+    /// Palette picture of a station item (no model is rendered yet): a drawing in the faction's colour, one shape per
+    /// kind: trade station = hub with arms, shipyard / wharf = build frame (big / small), equipment dock = hub in a
+    /// ring, defence platform = shield, factory = hub with production modules, pirate station = hub with spikes.
+    /// </summary>
+    static Texture2D StationPicture(DecorCatalog.Item item)
+    {
+        var p = item.Ref.Split(':');
+        string kind = p[0], col = X4Data.Galaxy.GalaxyFacts.Factions.TryGetValue(p.Length > 1 ? p[1] : "", out var f) ? f.Colour : "#c8c8c8";
+        string shape = kind switch
+        {
+            "shipyard" => "<path d='M28 34h72v12H40v36h60v12H28z'/><rect x='54' y='54' width='34' height='20' rx='3'/>",
+            "wharf" => "<path d='M38 42h52v10H48v24h42v10H38z'/><rect x='58' y='58' width='22' height='12' rx='2'/>",
+            "equipmentdock" => "<circle cx='64' cy='64' r='16'/><circle cx='64' cy='64' r='34' fill='none' stroke-width='8'/>",
+            "defence" => "<path d='M64 22l34 12v26c0 22-14 38-34 46-20-8-34-24-34-46V34z'/>",
+            "factory" => "<circle cx='64' cy='64' r='14'/><rect x='22' y='56' width='84' height='16' rx='3'/><rect x='26' y='36' width='18' height='18'/><rect x='84' y='36' width='18' height='18'/><rect x='26' y='74' width='18' height='18'/><rect x='84' y='74' width='18' height='18'/>",
+            "piratebase" => "<circle cx='64' cy='64' r='20'/><path d='M64 18l7 26h-14zM64 110l-7-26h14zM18 64l26-7v14zM110 64l-26 7v-14zM32 32l22 12-10 10zM96 96l-22-12 10-10z'/>",
+            _ => "<circle cx='64' cy='64' r='18'/><rect x='58' y='18' width='12' height='92' rx='3'/><rect x='18' y='58' width='92' height='12' rx='3'/>",
+        };
+        var svg = $"<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128' viewBox='0 0 128 128'><rect width='128' height='128' rx='10' fill='#10151c'/>"
+                + $"<g fill='{col}' stroke='{col}' stroke-linejoin='round'>{shape}</g></svg>";
+        var img = new Image(); img.LoadSvgFromString(svg, 1f);
+        return ImageTexture.CreateFromImage(img);
     }
 
     /// <summary>Puts an item into the queue (first = rendered next).</summary>
