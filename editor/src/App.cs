@@ -379,6 +379,47 @@ public partial class App : Control
     /// New station in the open sector at x / z (X4 metres). Owner: the sector's owner if it has that kind, else the first
     /// faction that has; pirate stations: the first pirate station of the game; factories: the owner's first product.
     /// </summary>
+    // ---------------------------------------------------------------------------------------------- content scope
+    /// <summary>
+    /// May this project use content (backdrop, music, field, object, faction, station) from this source (extension
+    /// folder; "base" = the game)? Egosoft's (base game, DLCs) always. A patch of the X4 galaxy: nothing else, so a mod
+    /// opened for another project or installed in the game offers nothing there. A patch of a mod's galaxy: that mod
+    /// and the mods it depends on. An own galaxy: everything (other authors' items ask first, ForeignWarning).
+    /// </summary>
+    public bool Allowed(string? source)
+    {
+        if (source == null || source == "base" || source.StartsWith("ego_", StringComparison.OrdinalIgnoreCase)) return true;
+        var p = EditP;
+        if (p.BaseGalaxy == null) return true;
+        return ModScope(p.BaseSource).Contains(source);
+    }
+
+    /// <summary>The extension folders a patch may use: its galaxy's mod and that mod's dependencies (all levels).</summary>
+    HashSet<string> ModScope(string? baseSource)
+    {
+        if (_scopeFor == baseSource && _scope != null) return _scope;
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var all = Game?.Vfs.Extensions.All ?? new();
+        void Add(X4Data.Vfs.Extension? e)
+        {
+            if (e == null || !set.Add(e.FolderName)) return;
+            foreach (var d in e.Dependencies) Add(all.FirstOrDefault(x => x.Id.Equals(d.Id, StringComparison.OrdinalIgnoreCase)));
+        }
+        if (baseSource != null && baseSource != "base") Add(all.FirstOrDefault(e => e.FolderName.Equals(baseSource, StringComparison.OrdinalIgnoreCase)));
+        _scopeFor = baseSource; _scope = set;
+        return set;
+    }
+    string? _scopeFor; HashSet<string>? _scope;
+
+    /// <summary>Changes when the allowed content changes (another project / galaxy): the palette rebuilds itself then.</summary>
+    public string ContentScope => EditP.BaseGalaxy == null ? "own" : "patch:" + (EditP.BaseSource ?? "base") + ":" + (Decor?.Items.Count ?? 0);
+
+    /// <summary>Decoration palette items this project may use (Allowed).</summary>
+    public List<X4Data.Space.DecorCatalog.Item> DecorItems => Decor?.Items.Where(i => Allowed(i.Source)).ToList() ?? new();
+
+    /// <summary>Source of a game file path: "extensions/&lt;folder&gt;/..." = that folder, else "base".</summary>
+    public static string SourceOfPath(string path) => path.StartsWith("extensions/", StringComparison.OrdinalIgnoreCase) ? path.Split('/')[1] : "base";
+
     /// <summary>
     /// The palette group "Stations": one item per kind and faction that has it in the game (pirate stations: per station),
     /// added to the decoration catalogue so the palette shows them like the decorations (picture = StationPicture).
@@ -427,13 +468,13 @@ public partial class App : Control
     {
         var fc = Factions;
         if (fc == null) return GalaxyFacts.Factions.Keys.Select(f => (f, (string?)null, f)).ToList();
-        bool Usable(string f) => fc.Get(f) is { Active: true, Hidden: false } && f != "player";
+        bool Usable(string f) => fc.Get(f) is { Active: true, Hidden: false } fa && f != "player" && Allowed(fa.Source);
         if (kind == "piratebase")
-            return fc.PirateStations.Select(t => (t.Faction, (string?)t.Id, $"{FactionName(t.Faction)}: {t.Tag switch { "piratedepot" => "depot", "anarchyport" => "anarchy port", _ => "base" }} ({t.Id})")).ToList();
+            return fc.PirateStations.Where(t => Allowed(t.Source) && Allowed(fc.Get(t.Faction)?.Source)).Select(t => (t.Faction, (string?)t.Id, $"{FactionName(t.Faction)}: {t.Tag switch { "piratedepot" => "depot", "anarchyport" => "anarchy port", _ => "base" }} ({t.Id})")).ToList();
         if (kind == "factory")
             return fc.ProductWares.Keys.Where(Usable).OrderBy(FactionName).Select(f => (f, (string?)null, FactionName(f))).ToList();
         var tag = GalaxyOps.StationKinds.First(k => k.Kind == kind).Tag;
-        return fc.Stations.Where(t => t.Tag == tag && Usable(t.Faction)).Select(t => t.Faction).Distinct(StringComparer.OrdinalIgnoreCase)
+        return fc.Stations.Where(t => t.Tag == tag && Usable(t.Faction) && Allowed(t.Source)).Select(t => t.Faction).Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(FactionName).Select(f => (f, (string?)null, FactionName(f))).ToList();
     }
 

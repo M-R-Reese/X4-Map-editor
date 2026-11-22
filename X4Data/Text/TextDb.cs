@@ -22,14 +22,41 @@ public sealed class TextDb
     public TextDb(GameData g, int language = 44)
     {
         Language = language;
-        var doc = GameXml.Load(g.Vfs, $"t/0001-l{language:000}.xml", g.Notes);
-        if (doc == null && language != 44) doc = GameXml.Load(g.Vfs, "t/0001-l044.xml", g.Notes);
+        var doc = Load(g, language);
+        if (doc == null && language != 44) doc = Load(g, 44);
         foreach (var page in doc?.Root?.Elements("page") ?? Enumerable.Empty<XElement>())
         {
             if (!int.TryParse((string?)page.Attribute("id"), out var pid)) continue;
             foreach (var t in page.Elements("t"))
                 if (int.TryParse((string?)t.Attribute("id"), out var tid)) _raw[(pid, tid)] = t.Value;   // later (extensions) win
         }
+    }
+
+    /// <summary>
+    /// The language's text file as the game builds it: the base game's t/0001-lNNN.xml, then per extension (load order)
+    /// ITS t/0001-lNNN.xml, or, when it has none, its t/0001.xml: the file a mod uses for every language it has no file
+    /// for (full conversions often ship their English texts only so). A &lt;diff&gt; is applied, pages are added.
+    /// </summary>
+    static XDocument? Load(GameData g, int language)
+    {
+        var vfs = g.Vfs;
+        string file = $"t/0001-l{language:000}.xml";
+        XDocument? doc = null;
+        try { if (vfs.Exists(file)) doc = GameXml.Parse(vfs.Read(file)); } catch (Exception e) { g.Notes.Add($"{file}: not readable ({e.Message})"); }
+        foreach (var ext in vfs.Extensions.LoadOrder)
+        {
+            var own = $"extensions/{ext.FolderName}/{file}";
+            var p = vfs.Exists(own) ? own : $"extensions/{ext.FolderName}/t/0001.xml";
+            if (!vfs.Exists(p)) continue;
+            XDocument part;
+            try { part = GameXml.Parse(vfs.Read(p)); }
+            catch (Exception e) { g.Notes.Add($"{p}: not readable ({e.Message})"); continue; }
+            if (part.Root == null) continue;
+            if (part.Root.Name.LocalName == "diff") { if (doc != null) GameXml.Apply(doc, part.Root, p, g.Notes); }
+            else if (doc == null) doc = part;
+            else doc.Root!.Add(part.Root.Elements());
+        }
+        return doc;
     }
 
     /// <summary>Text of {page,id}, resolved and cleaned; null if the game has none.</summary>

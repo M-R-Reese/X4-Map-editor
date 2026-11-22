@@ -125,6 +125,11 @@ public sealed class Regions
                 if (d != null && d.Source == "base") d.Source = ext.FolderName;
             }
         }
+        // a mod's (full conversion's) "globalregion_<sector>" definitions are often its ONLY fields: offered, so its author
+        // can use them in new sectors (vanilla's global regions stay hidden)
+        foreach (var d in All.Where(d => d.Hidden && d.R > 0 && d.Name.StartsWith("globalregion", StringComparison.OrdinalIgnoreCase)
+                                         && d.Source != "base" && !d.Source.StartsWith("ego_", StringComparison.OrdinalIgnoreCase)))
+            d.Hidden = false;
     }
 
     static string MakeLabel(Def d)

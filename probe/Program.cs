@@ -233,3 +233,62 @@ else if (mode == "readgalaxy")
     try { var bg = X4Data.Galaxy.BaseGalaxy.Read(g, info, new X4Data.Text.TextDb(g, 44)); Console.WriteLine($"read ok: {bg.Clusters.Count} clusters, {bg.Clusters.Sum(c => c.Sectors.Count)} sectors, {bg.Clusters.Sum(c => c.Sectors.Sum(s => s.Gates.Count))} gates"); }
     catch (Exception e) { Console.WriteLine(e); }
 }
+else if (mode == "modfiles")
+{
+    // files of one extension (by folder name) under a path prefix, e.g. modfiles starwarsmod_m1 t/
+    foreach (var f in g.Vfs.Files.Where(f => f.Path.StartsWith("extensions/" + args[1] + "/" + args[2], StringComparison.OrdinalIgnoreCase)).Take(int.Parse(args.Length > 3 ? args[3] : "60"))) Console.WriteLine(f.Path);
+}
+else if (mode == "modcontent")
+{
+    // what the editor gets from one extension (folder name): galaxy names, backdrops, decorations, cluster backdrops used
+    var src = args[1]; var tx = new X4Data.Text.TextDb(g, 44);
+    var bds = X4Data.Space.Backdrops.List(g); Console.WriteLine($"backdrops from {src}: {bds.Count(b => b.Source == src)} of {bds.Count}");
+    var dc = new X4Data.Space.DecorCatalog(g, tx); Console.WriteLine($"decorations from {src}: {dc.Items.Count(i => i.Source == src)}; " + string.Join(", ", dc.Items.Where(i => i.Source == src).Select(i => i.Category).Distinct()));
+    foreach (var i in X4Data.Galaxy.BaseGalaxy.Installed(g).Where(i => i.Source == src))
+    {
+        var bg = X4Data.Galaxy.BaseGalaxy.Read(g, i, tx); var secs = bg.Clusters.SelectMany(c => c.Sectors).ToList();
+        Console.WriteLine($"{i.Macro}: {secs.Count(s => s.Name != s.Macro)} of {secs.Count} sectors named; e.g. " + string.Join(" | ", secs.Take(6).Select(s => s.Name)));
+        var cm = bg.Clusters.Take(40).Select(c => g.Macro(c.Macro)?.Element("connections")?.Elements("connection").FirstOrDefault(x => (string?)x.Attribute("ref") == "content")?.Element("macro")?.Element("component")?.Attribute("ref")?.Value).Where(v => v != null).Distinct().ToList();
+        Console.WriteLine("cluster backdrops: " + string.Join(", ", cm.Take(8)) + $" ({cm.Count(c => bds.Any(b => b.Component.Equals(c, StringComparison.OrdinalIgnoreCase)))} of {cm.Count} in the backdrop list)");
+    }
+}
+else if (mode == "substfiles")
+{
+    // game paths an extension replaces (subst_*.cat / loose files at base paths), grouped by folder
+    var ext = g.Vfs.Extensions.All.First(e => e.FolderName == args[1]);
+    var mine = g.Vfs.Files.Where(f => !f.Path.StartsWith("extensions/") && ((f.DiskPath ?? f.Entry?.Catalog.CatPath ?? "").Replace((char)92, (char)47).StartsWith(ext.Folder.Replace((char)92, (char)47), StringComparison.OrdinalIgnoreCase))).ToList();
+    Console.WriteLine($"{mine.Count} game paths replaced by {args[1]}");
+    foreach (var grp in mine.GroupBy(f => string.Join("/", f.Path.Split((char)47).Take(2))).OrderByDescending(x => x.Count()).Take(25)) Console.WriteLine($"{grp.Count(),6} {grp.Key}");
+    foreach (var f in mine.Where(f => f.Path.StartsWith("libraries/") || f.Path.StartsWith("t/") || f.Path.StartsWith("index/"))) Console.WriteLine("  " + f.Path);
+}
+else if (mode == "modmacros")
+{
+    // macro classes in an extension (folder) with examples, and its region definitions
+    var cls = new Dictionary<string, List<string>>();
+    foreach (var f in g.Vfs.Files.Where(f => f.Path.StartsWith("extensions/" + args[1] + "/", StringComparison.OrdinalIgnoreCase) && f.Path.EndsWith("_macro.xml", StringComparison.OrdinalIgnoreCase)))
+    {
+        XElement? root; try { root = X4Data.Xml.GameXml.Parse(f.Read()).Root; } catch { continue; }
+        foreach (var m in root?.Elements("macro") ?? Enumerable.Empty<XElement>()) { var c = (string?)m.Attribute("class") ?? "?"; if (!cls.TryGetValue(c, out var l)) cls[c] = l = new(); l.Add((string?)m.Attribute("name") ?? ""); }
+    }
+    foreach (var (c, l) in cls.OrderByDescending(k => k.Value.Count)) Console.WriteLine($"{l.Count,6} {c}: {string.Join(", ", l.Take(5))}");
+    var rd = "extensions/" + args[1] + "/libraries/region_definitions.xml";
+    if (g.Vfs.Exists(rd)) { var d = X4Data.Xml.GameXml.Parse(g.Vfs.Read(rd)); Console.WriteLine($"region_definitions: root {d.Root?.Name}, {d.Descendants("region").Count()} regions: " + string.Join(", ", d.Descendants("region").Take(8).Select(r => (string?)r.Attribute("name")))); }
+    else Console.WriteLine("no region_definitions.xml");
+}
+else if (mode == "modregions")
+{
+    var rg = new X4Data.Space.Regions(g);
+    var mine = rg.All.Where(d => d.Source == args[1]).ToList();
+    Console.WriteLine($"{mine.Count} definitions from {args[1]}");
+    foreach (var grp in mine.GroupBy(d => (d.Category, d.Hidden))) Console.WriteLine($"{grp.Count(),5} {grp.Key.Category} hidden={grp.Key.Hidden}: " + string.Join(", ", grp.Take(4).Select(d => d.Name)));
+}
+else if (mode == "modmusic")
+{
+    var ml = new X4Data.Audio.MusicLibrary(g);
+    Console.WriteLine($"{ml.All.Count} music entries with tracks; with a track of {args[1]}: {ml.All.Count(m => m.Tracks.Any(t => t.File.Contains(args[1], StringComparison.OrdinalIgnoreCase)))}");
+    // music ids the mod defines, and whether their tracks were found
+    var lib = "extensions/" + args[1] + "/libraries/sound_library.xml";
+    if (g.Vfs.Exists(lib))
+        foreach (var s in X4Data.Xml.GameXml.Parse(g.Vfs.Read(lib)).Descendants("sound").Where(s => ((string?)s.Attribute("id") ?? "").StartsWith("music_")).Take(12))
+            Console.WriteLine($"  {(string?)s.Attribute("id")}: found {(ml.Get((string?)s.Attribute("id") ?? "") != null)}, first track {s.Descendants("select").Select(x => (string?)x.Attribute("start")).FirstOrDefault()}");
+}

@@ -97,6 +97,23 @@ if (swMod != null && File.Exists(Path.Combine(swMod, "content.xml")))
     foreach (var i in gal) Console.WriteLine($"  galaxy {i.Macro} {i.Folder} {i.Source}");
     Check("mod from another folder read, switched on", sw2 != null && sw2.Enabled, sw2?.EnabledBy ?? "not found");
     Check("its galaxy offered for a patch", gal.Any(i => i.Source.Equals(sw2?.FolderName, StringComparison.OrdinalIgnoreCase)), string.Join(", ", gal.Select(i => i.Source)));
+    // a full conversion: its galaxy is read whole, with its own names (texts in t/0001.xml, no t/0001-l044.xml) and fields
+    var own = gal.FirstOrDefault(i => i.Source.Equals(sw2?.FolderName, StringComparison.OrdinalIgnoreCase) && !i.Folder.Contains("showcase", StringComparison.OrdinalIgnoreCase));
+    if (own != null)
+    {
+        var tx2 = new X4Data.Text.TextDb(g2, 44);
+        X4Data.Galaxy.BaseGalaxy? read2 = null; string err = "";
+        try { read2 = X4Data.Galaxy.BaseGalaxy.Read(g2, own, tx2); } catch (Exception e) { err = e.Message; }
+        var secs = read2?.Clusters.SelectMany(c => c.Sectors).ToList() ?? new();
+        Check("full conversion's galaxy read (empty numbers in its map files tolerated)", secs.Count > 100, $"{secs.Count} sectors {err}");
+        Check("its sector names come from its t/0001.xml (the file for all languages)", secs.Count > 0 && secs.Count(s => s.Name != s.Macro) > secs.Count * 0.9,
+            $"{secs.Count(s => s.Name != s.Macro)} of {secs.Count} named; " + string.Join(" | ", secs.Take(4).Select(s => s.Name)));
+        var dc2 = new X4Data.Space.DecorCatalog(g2, tx2);
+        Check("its own fields offered in the palette (its globalregion definitions)", dc2.Items.Count(i => i.Source == sw2!.FolderName && i.Kind == "region") > 50,
+            $"{dc2.Items.Count(i => i.Source == sw2!.FolderName && i.Kind == "region")} fields");
+        Check("its backdrops listed", X4Data.Space.Backdrops.List(g2).Count(b => b.Source == sw2!.FolderName) > 50, "");
+        Check("its music found", new X4Data.Audio.MusicLibrary(g2).All.Any(m => m.Tracks.Any(t => t.File.Contains(sw2!.FolderName, StringComparison.OrdinalIgnoreCase))), "");
+    }
 }
 DecorTests.Run(game, Check);
 

@@ -84,6 +84,7 @@ public partial class DecorPalette : HBoxContainer
     /// <summary>Strip buttons from the catalogue (call again when the game files are read).</summary>
     public void Rebuild()
     {
+        _scope = _app.Decor != null ? _app.ContentScope : null;          // rebuilt for this project's allowed content
         foreach (var c in _strip.GetChildren()) { _strip.RemoveChild(c); c.QueueFree(); }
         _groupButtons.Clear();
         _fold = new Button { Text = _folded ? "▶" : "◀", Flat = true, TooltipText = "Fold the decoration palette away / open it" };
@@ -96,16 +97,17 @@ public partial class DecorPalette : HBoxContainer
             _strip.AddChild(new Label { Text = "Reading\ngame\nfiles...", HorizontalAlignment = HorizontalAlignment.Center, Modulate = new Color(1, 1, 1, 0.5f) });
             return;
         }
-        var groups = cat.Categories.OrderBy(g => Array.IndexOf(Order, g) is var i && i >= 0 ? i : 99).ThenBy(g => g).ToList();
+        var all = _app.DecorItems;                                     // what this project may use (App.Allowed)
+        var groups = cat.Categories.Where(g => all.Any(i => i.Category == g)).OrderBy(g => Array.IndexOf(Order, g) is var i && i >= 0 ? i : 99).ThenBy(g => g).ToList();
         foreach (var g in groups)
         {
-            var first = cat.Items.FirstOrDefault(i => i.Category == g && i.Egosoft) ?? cat.Items.First(i => i.Category == g);
+            var first = all.FirstOrDefault(i => i.Category == g && i.Egosoft) ?? all.First(i => i.Category == g);
             var b = new Button
             {
                 Text = Short.TryGetValue(g, out var s) ? s : g, ToggleMode = true, ButtonPressed = _open == g,
                 Icon = _app.Previews?.Get(first), ExpandIcon = true, IconAlignment = HorizontalAlignment.Center,
                 VerticalIconAlignment = VerticalAlignment.Top, CustomMinimumSize = new Vector2(80, 78), ClipText = true,
-                TooltipText = $"{g} ({cat.Items.Count(i => i.Category == g)})",
+                TooltipText = $"{g} ({all.Count(i => i.Category == g)})",
             };
             b.AddThemeFontSizeOverride("font_size", 11);
             b.Pressed += () => Open(_open == g ? null : g);
@@ -137,7 +139,7 @@ public partial class DecorPalette : HBoxContainer
         var cat = _app.Decor;
         if (cat == null || _open == null) return;
         var words = _search.Text.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var items = cat.Items.Where(i => i.Category == _open)
+        var items = _app.DecorItems.Where(i => i.Category == _open)
                              .Where(i => words.All(w => i.Label.ToLowerInvariant().Contains(w) || i.Ref.ToLowerInvariant().Contains(w))).ToList();
         _title.Text = $"{_open}  ({items.Count})";
         foreach (var item in items) _grid.AddChild(Tile(item));
@@ -204,8 +206,11 @@ public partial class DecorPalette : HBoxContainer
                 b.Icon = _app.Previews!.Get(first, false);
     }
 
+    string? _scope;
+
     public override void _Process(double delta)
     {
+        if (_scope != null && _app.Decor != null && _scope != _app.ContentScope) Rebuild();   // another project: other content allowed
         if (!_flyout.Visible || (_footerTimer -= delta) > 0) return;
         _footerTimer = 0.5;
         UpdateFooter();
@@ -215,7 +220,7 @@ public partial class DecorPalette : HBoxContainer
     {
         var pv = _app.Previews;
         if (pv == null) { _footer.Text = ""; _modButton.Visible = false; return; }
-        int mods = _open != null ? (_app.Decor?.Items.Count(i => i.Category == _open && !i.Egosoft) ?? 0) : 0;
+        int mods = _open != null ? _app.DecorItems.Count(i => i.Category == _open && !i.Egosoft) : 0;
         var without = mods > 0 ? pv.ModItemsWithout().Count : 0;
         _footer.Text = (pv.Pending > 0 ? $"Making pictures: {pv.Pending} to go (made this session: {pv.DoneThisSession}). " : "")
                      + (without > 0 ? $"{without} items from other authors' mods have no picture yet." : "");

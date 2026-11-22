@@ -157,7 +157,7 @@ public partial class SidePanel : VBoxContainer
         if (_app.Backdrops.Count > 0)
         {
             string ExtName(string folder) => game?.Vfs.Extensions.All.FirstOrDefault(e => e.FolderName.Equals(folder, StringComparison.OrdinalIgnoreCase))?.Name ?? folder;
-            backdrops = _app.Backdrops.Select(b =>
+            backdrops = _app.Backdrops.Where(b => _app.Allowed(b.Source) || b.Component.Equals(c.BackdropComponent(), StringComparison.OrdinalIgnoreCase)).Select(b =>
             {
                 string label = b.Number is { } n ? $"Backdrop {n:00}" : b.Component;
                 if (b.Source != "base") label += b.Egosoft ? $" ({ExtName(b.Source)})" : $"  ⚠ from mod \"{ExtName(b.Source)}\"";
@@ -176,7 +176,7 @@ public partial class SidePanel : VBoxContainer
 
         var lib = _app.Music.Library;
         var music = lib != null
-            ? new[] { ("", "(none)") }.Concat(lib.All.Select(m => (m.Id, m.Description))).ToArray()
+            ? new[] { ("", "(none)") }.Concat(lib.All.Where(m => m.Id == c.Music || m.Tracks.Any(t => _app.Allowed(App.SourceOfPath(t.File)))).Select(m => (m.Id, m.Description))).ToArray()
             : GalaxyFacts.Music.Select(m => (m, m == "" ? "(none)" : m)).ToArray();
         Choice("Music", music, c.Music, v => c.Music = v, arrows: true, tip: "The music that plays in this cluster.", dice: v => v != "");
         var row = new HBoxContainer(); _box.AddChild(row);
@@ -272,7 +272,7 @@ public partial class SidePanel : VBoxContainer
         string Src(string source) => source == "base" ? "" : $"  ({_app.Game?.Vfs.Extensions.All.FirstOrDefault(e => e.FolderName.Equals(source, StringComparison.OrdinalIgnoreCase))?.Name ?? source})";
 
         // ---- owner
-        var owners = new[] { ("", "(nobody)") }.Concat(fc.Owners.Select(f => (f.Id, f.Name + (f.Pirate ? "  ☠" : "") + Src(f.Source)))).ToArray();
+        var owners = new[] { ("", "(nobody)") }.Concat(fc.Owners.Where(f => _app.Allowed(f.Source)).Select(f => (f.Id, f.Name + (f.Pirate ? "  ☠" : "") + Src(f.Source)))).ToArray();
         if (ai.Owner != null && owners.All(o => o.Item1 != ai.Owner)) owners = owners.Append((ai.Owner, ai.Owner + "  ⚠ not in the game")).ToArray();
         Choice("Owner at start", owners, ai.Owner ?? "", v => Set(a => a.Owner = v == "" ? null : v),
             tip: "The export places one claiming station (defence platform) of this faction: the sector is theirs from the game start. ☠ = pirate faction.");
@@ -281,7 +281,7 @@ public partial class SidePanel : VBoxContainer
                  "Counted in the game's god.xml (factories placed in a faction's sectors) and jobs.xml (traders, miners, patrols, pirates ...). The game decides by demand which ones really come, and when.");
 
         // ---- pirate station
-        var pir = new[] { ("", "(none)") }.Concat(fc.PirateStations.Select(t =>
+        var pir = new[] { ("", "(none)") }.Concat(fc.PirateStations.Where(t => _app.Allowed(t.Source) && _app.Allowed(fc.Get(t.Faction)?.Source)).Select(t =>
             ($"{t.Id}|{t.Faction}", $"{fc.Get(t.Faction)?.Name ?? t.Faction}: {PirateKinds.GetValueOrDefault(t.Tag, t.Tag)}{Src(t.Source)}"))).ToArray();
         var cur = ai.PirateStation != null ? $"{ai.PirateStation}|{ai.PirateFaction}" : "";
         Choice("Pirate station", pir, cur, v => Set(a =>
