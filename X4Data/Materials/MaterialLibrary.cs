@@ -21,6 +21,10 @@ public sealed class MaterialLibrary
         /// it has one (the r / g / b attributes are often left at old values), else from r / g / b.</summary>
         public Dictionary<string, (float R, float G, float B)> Colors = new(StringComparer.OrdinalIgnoreCase);
         public (float R, float G, float B)? Color(string n) => Colors.TryGetValue(n, out var c) ? c : null;
+        /// <summary>Alpha of a colour (0..1): 4th number of "(color r g b a)", else the "a" attribute; planets use it
+        /// (color_atmo: how thick the haze over the surface is).</summary>
+        public Dictionary<string, float> Alphas = new(StringComparer.OrdinalIgnoreCase);
+        public float Alpha(string n, float fallback) => Alphas.TryGetValue(n, out var a) ? a : fallback;
     }
 
     readonly Dictionary<string, Material> _byName = new(StringComparer.OrdinalIgnoreCase);
@@ -54,6 +58,7 @@ public sealed class MaterialLibrary
                                 var nums = System.Text.RegularExpressions.Regex.Matches(v, @"-?\d+(\.\d+)?").Select(x => float.Parse(x.Value, CultureInfo.InvariantCulture)).ToList();
                                 float A(string an) => float.TryParse((string?)p.Attribute(an), NumberStyles.Float, CultureInfo.InvariantCulture, out var x) ? x : 255;
                                 mat.Colors[n] = nums.Count >= 3 ? (nums[0] / 255f, nums[1] / 255f, nums[2] / 255f) : (A("r") / 255f, A("g") / 255f, A("b") / 255f);
+                                mat.Alphas[n] = (nums.Count >= 4 ? nums[3] : A("a")) / 255f;
                                 break;
                             }
                         }

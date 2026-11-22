@@ -688,7 +688,7 @@ public partial class SidePanel : VBoxContainer
     {
         var s = _app.P.SectorById(_app.OpenSectorId);
         if (s == null) return;
-        Head("Read-only sector", "This sector belongs to the galaxy your patch adds to: you can look, not change (only your patch's new gates move). Ctrl+C on a field copies it, to paste it (Ctrl+V) into one of your own sectors.");
+        Head("Read-only sector", "This sector belongs to the galaxy your patch adds to: you can look, not change. Your patch's new gates move, and you can add pirate stations (Stations palette, right-click). Ctrl+C on a field copies it, to paste it (Ctrl+V) into one of your own sectors.");
         _box.AddChild(new Label { Text = s.Name, Modulate = new Color("e8f1ff") });
         Hint($"Sunlight {s.Sunlight:0.##}   Economy {s.Economy:0.##}   Security {s.Security:0.##}");
         if (_app.Sel is { Kind: "decor" } ds && _app.P.DecorById(ds.Id) is { } d)
@@ -709,6 +709,18 @@ public partial class SidePanel : VBoxContainer
             var near = s.Gates.Where(o => o.Id != my.Id).Select(o => (o, d: Math.Sqrt((o.X - my.X) * (o.X - my.X) + (o.Y - my.Y) * (o.Y - my.Y) + (o.Z - my.Z) * (o.Z - my.Z)))).OrderBy(t => t.d).FirstOrDefault();
             if (near.o != null && near.d < 40_000)
                 _box.AddChild(new Label { Text = $"⚠ Only {near.d / 1000:0} km from the gate to {_app.P.SectorOfGate(near.o.Link ?? -1)?.Name ?? "?"}: keep 40 km or more.", Modulate = new Color("ffb347"), AutowrapMode = TextServer.AutowrapMode.WordSmart, CustomMinimumSize = new Vector2(320, 0) });
+        }
+        if (_app.Sel is { Kind: "station" } ss && _app.P.ViewBaseStations.ContainsKey(ss.Id) && _app.P.StationById(ss.Id) is { } bst)
+        {
+            Head("Your patch's pirate station", "The patch adds it to this sector (god.xml); running games get it too. Drag it to move it (Shift: up / down), the ring or R turns it. Right-click or Del: delete.");
+            var owners = _app.StationOwners("piratebase");
+            Choice("Pirate station", owners.Select(t => ($"{t.Ref}|{t.Faction}", t.Label)).ToArray(), $"{bst.Ref}|{bst.Faction}",
+                v => { var parts = v.Split('|'); bst.Ref = parts[0]; bst.Faction = parts[1]; }, tip: "Pirate stations of the game (base, depot, anarchy port), with their faction.");
+            Number("East x (km)", bst.X / 1000, -1000, 1000, 1, v => bst.X = Math.Round(v * 1000));
+            Number("Height y (km)", bst.Y / 1000, -500, 500, 1, v => bst.Y = Math.Round(v * 1000));
+            Number("North z (km)", bst.Z / 1000, -1000, 1000, 1, v => bst.Z = Math.Round(v * 1000));
+            Number("Facing (°)", bst.Yaw, -180, 180, 5, v => bst.Yaw = GalaxyOps.NormYaw(v), "0 = north, 90 = east.");
+            Button("Delete", _app.DeleteSelection);
         }
         Head($"Gates ({s.Gates.Count})");
         foreach (var g in s.Gates)

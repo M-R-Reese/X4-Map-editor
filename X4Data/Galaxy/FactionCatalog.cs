@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using X4Data.Text;
 using X4Data.Xml;
+using X4Data.Vfs;
 
 namespace X4Data.Galaxy;
 
@@ -31,6 +32,20 @@ public sealed class FactionCatalog
     readonly Dictionary<string, Faction> _factions = new(StringComparer.OrdinalIgnoreCase);
     public IReadOnlyCollection<Faction> All => _factions.Values;
     public List<StationType> Stations { get; } = new();
+    /// <summary>A module of a construction plan: its macro and where it sits in the station (X4 space, metres, degrees).</summary>
+    public sealed record PlanModule(string Macro, double X, double Y, double Z, double Yaw, double Pitch, double Roll);
+    /// <summary>constructionplans.xml: plan id -> its modules (the 3D view builds stations from them).</summary>
+    public Dictionary<string, List<PlanModule>> Plans { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>stations.xml id -> construction plan id (its group's first plan).</summary>
+    public Dictionary<string, string> StationPlans { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The modules of a station: piratebase / known stations.xml id = that station, else the first station type
+    /// with this tag of this faction. Null when none has a plan (factories: god.xml builds them from production modules).</summary>
+    public List<PlanModule>? ModulesOf(string? stationId, string? tag, string faction)
+    {
+        var id = stationId ?? Stations.FirstOrDefault(t => t.Tag == tag && string.Equals(t.Faction, faction, StringComparison.OrdinalIgnoreCase) && StationPlans.ContainsKey(t.Id))?.Id;
+        return id != null && StationPlans.TryGetValue(id, out var plan) && Plans.TryGetValue(plan, out var mods) && mods.Count > 0 ? mods : null;
+    }
     /// <summary>Sector tags in mapdefaults.xml with how many sectors use them.</summary>
     public SortedDictionary<string, int> MapTags { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>faction id -> god.xml products that may go to a sector that faction owns (class galaxy, faction list).</summary>
@@ -71,7 +86,8 @@ public sealed class FactionCatalog
 
         // ---- faction logic managers: <param name="Faction" value="faction.x"/> in md/factionlogic.xml and its DLC diffs
         var managers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var f in g.Vfs.Files.Where(f => Regex.IsMatch(f.Path, @"(^|/)md/factionlogic\.xml$", RegexOptions.IgnoreCase)))
+        foreach (var f in g.Vfs.Files.Where(f => Regex.IsMatch(f.Path, @"(^|/)md/factionlogic\.xml$", RegexOptions.IgnoreCase)
+                                                 && (VirtualFileSystem.ExtensionOf(f.Path) is not { } ext || g.Vfs.Changes(ext))))
             foreach (Match m in Regex.Matches(System.Text.Encoding.UTF8.GetString(f.Read()), @"name=""Faction""\s+value=""faction\.(\w+)"""))
                 managers.Add(m.Groups[1].Value);
 
@@ -81,9 +97,17 @@ public sealed class FactionCatalog
             if ((string?)gr.Attribute("name") is { } n && gr.Elements("select").Select(s => (string?)s.Attribute("constructionplan")).FirstOrDefault(p => p != null) is { } plan)
                 groups[n] = plan;
         var plans = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);  // plan -> module macros
+        static double D(XElement? e, string a) => double.TryParse((string?)e?.Attribute(a), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
         foreach (var p in Root("libraries/constructionplans.xml")?.Elements("plan") ?? Enumerable.Empty<XElement>())
             if ((string?)p.Attribute("id") is { } id)
+            {
                 plans[id] = p.Elements("entry").Select(e => (string?)e.Attribute("macro")).OfType<string>().Distinct().ToList();
+                Plans[id] = p.Elements("entry").Where(e => e.Attribute("macro") != null).Select(e =>
+                {
+                    var o = e.Element("offset"); var pos = o?.Element("position"); var rot = o?.Element("rotation");
+                    return new PlanModule((string)e.Attribute("macro")!, D(pos, "x"), D(pos, "y"), D(pos, "z"), D(rot, "yaw"), D(rot, "pitch"), D(rot, "roll"));
+                }).ToList();
+            }
         var claimCache = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         bool Claims(string macro)
         {
@@ -95,6 +119,7 @@ public sealed class FactionCatalog
         {
             var id = (string?)st.Attribute("id") ?? ""; var grp = (string?)st.Attribute("group");
             bool claims = grp != null && groups.TryGetValue(grp, out var plan) && plans.TryGetValue(plan, out var mods) && mods.Any(Claims);
+            if (grp != null && groups.TryGetValue(grp, out var stPlan)) StationPlans[id] = stPlan;
             foreach (var cat in st.Elements("category"))
             {
                 var tags = ((string?)cat.Attribute("tags") ?? "").Trim('[', ']', ' ');

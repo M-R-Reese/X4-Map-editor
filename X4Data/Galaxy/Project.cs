@@ -30,6 +30,8 @@ public sealed class Project
     public string? BaseSource { get; set; }
     /// <summary>PATCH: gates on the side of the patched galaxy that our gates lead to (new ones or reused vanilla ones).</summary>
     public List<BaseGate> BaseGates { get; set; } = new();
+    /// <summary>PATCH: pirate stations our patch places in sectors of the patched galaxy (god.xml, as in our own sectors).</summary>
+    public List<BaseStation> BaseStations { get; set; } = new();
     /// <summary>
     /// Changes to the installed galaxy's OWN sectors and clusters (by macro name), docs/plan_galaxy_editor_modowner.md.
     /// One list for both ways out: the patch export writes them as diffs (anybody, for any mod), "Write into the mod"
@@ -53,6 +55,8 @@ public sealed class Project
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
     /// <summary>Read-only VIEW of a patched sector only (never saved): view gate id -> id of our BaseGate it shows (movable).</summary>
     [JsonIgnore] public Dictionary<int, int> ViewBaseGates { get; } = new();
+    /// <summary>Read-only view of a patched sector: view station id -> BaseStation id (those can be moved, edited, deleted).</summary>
+    [JsonIgnore] public Dictionary<int, int> ViewBaseStations { get; } = new();
 
     static readonly JsonSerializerOptions Json = new()
     {
@@ -279,6 +283,26 @@ public sealed class Gate
     public string Type { get; set; } = "gate";
     /// <summary>Id of the partner gate, or null.</summary>
     public int? Link { get; set; }
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>
+/// A pirate station our patch adds to a sector of the patched galaxy (vanilla or another mod's): exported to god.xml at
+/// this place in that sector, created in running games too (as our other god.xml stations).
+/// </summary>
+public sealed class BaseStation
+{
+    public int Id { get; set; }
+    public string SectorMacro { get; set; } = "";
+    public string SectorName { get; set; } = "";
+    public double X { get; set; }
+    public double Y { get; set; }
+    public double Z { get; set; }
+    public double Yaw { get; set; }
+    public string Kind { get; set; } = "piratebase";
+    public string Faction { get; set; } = "scaleplate";
+    /// <summary>The stations.xml id (e.g. "pirate_piratebase").</summary>
+    public string? Ref { get; set; }
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 }
 

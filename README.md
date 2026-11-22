@@ -6,15 +6,19 @@ Author: M.R. Reese. Work in progress. Licence: MIT (see `LICENSE`).
 
 ## Try the beta (no installation)
 
-**[Pre-release 0.2.6 beta](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.6-beta)** · [direct download (zip, 69 MB)](https://github.com/M-R-Reese/X4-Map-editor/releases/download/v0.2.6-beta/X4MapEditor-0.2.6-beta-windows.zip)
+**[Pre-release 0.2.7 beta](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.7-beta)** · [direct download (zip, 69 MB)](https://github.com/M-R-Reese/X4-Map-editor/releases/download/v0.2.7-beta/X4MapEditor-0.2.7-beta-windows.zip)
 
-1. Download `X4MapEditor-0.2.6-beta-windows.zip` from the [pre-release page](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.6-beta).
+1. Download `X4MapEditor-0.2.7-beta-windows.zip` from the [pre-release page](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.7-beta).
 2. Unpack it anywhere and start `X4MapEditor.exe`. Nothing else is needed: .NET comes with it.
 3. On the first start, check the folders the editor guessed (your X4 game folder, your profile folder) and click **Start**.
 
 You need X4: Foundations installed (Windows, Steam). New in 0.2: stations in 3D, game starts (fixed, personalised,
 creative), sector AI, and the game's faction AI and missions in an own galaxy. **Export as a mod is new and not yet fully
 tested in the game**: try it on a fresh save and report what you see. Feedback is welcome in the Issues.
+0.2.7: planets as in the game (land, sea, ice, clouds, atmosphere); real station models; View → Performance mode for
+weak graphics cards; a loading window that builds the project's models ahead (on the first start also the palette
+pictures, about a minute); pirate stations in vanilla sectors of a patch; installed mods only change the game data in
+projects that use them (a full conversion no longer hides the vanilla factions elsewhere).
 0.2.6: backdrops drawn much closer to the game (nebulae, starfields, rings); all of the game's music; full
 conversions' sector names, fields, backdrops and music; per project a choice of which mods' content it may use
 (Project settings → Mods; Egosoft content always).
@@ -51,6 +55,8 @@ need to unpack a mod to look at it or to build a patch for it.
 - **Mods from other folders:** Menu → "Open a mod from another folder" reads a mod that is not in the game's extensions folder (downloaded or unpacked), as switched on: its galaxy is offered for a patch, its backdrops and objects appear in the lists. Also under Folders → "Other mod folders".
 - **Spoken names:** the "Voice" button next to a cluster or sector name lists the location names the game has voice lines for (English and German), free ones first, with an optional Roman numeral. Listen to them before choosing; the game then says the name and shows it in each player's language.
 - **Galaxy map (2D):** create clusters on the hex grid (up to 3 sectors each), drag them around, connect sectors with gate pairs, set name, sunlight, economy, security and the player's start sector. A check list warns about unconnected gates, sectors nobody can reach, gates that are too close together, and similar problems.
+- **Performance mode (View menu):** simple materials, no nebulae, gas clouds, glows or other effects, no smoothing: for weak graphics cards. Saved for the next start.
+- **Loading window:** at start the editor reads the game files and builds the project's models ahead (gates, stations, objects, backdrops), so the sector view runs smoothly afterwards.
 - **Sector view (3D):** the sector with its ecliptic (rings every 50 km), gates with their real models, and the cluster's real backdrop as the sky (planets, moons, rings, nebulae), with the sun's direction taken from that backdrop.
   - Place the sector anywhere inside its backdrop, for example right next to a gas giant. Vanilla does the same.
   - Choose from every backdrop the installed game has (base game and DLCs), and play the cluster's music.

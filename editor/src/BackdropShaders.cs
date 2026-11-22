@@ -5,9 +5,9 @@ using X4Data.Materials;
 namespace GalaxyEditor3D;
 
 /// <summary>
-/// Godot shaders for X4's backdrop materials (sky, stars, nebulae, suns, atmospheres, rings). Own code that follows
-/// what the material entries say; X4's own shaders are not readable, so the look is approximated and tuned against
-/// in-game screenshots (2026-11-22: Midnight Star, cluster_703_v1).
+/// Godot shaders for X4's backdrop materials (sky, stars, nebulae, suns, rings). Own code that follows
+/// what the material entries say; the look is approximated and tuned against in-game screenshots (X4's own GLSL is in
+/// shadergl and may be read for facts, never copied: Egosoft's property) (2026-11-22: Midnight Star, cluster_703_v1).
 /// Facts from the material library:
 /// - p1_stars ADDITIVE: diffuse_map (nebula or star atlas, no alpha), diffuse2_map optional mask, color_emissive, diffuseStr.
 /// - p1_starfield ADDITIVE: three layers, diffuse_map (tiling diffuse_tiling), diffuse2_map (diffuse2_tiling),
@@ -17,7 +17,7 @@ namespace GalaxyEditor3D;
 ///   "angle_fade": fades where the surface is seen edge-on (shells) or face-on.
 /// - p1_complex_unlit ALPHA8: planet rings: diffuse_map with alpha, diffuse2_map tint.
 /// - p1_planet_sun: diffuse_map (one channel, the "flakes") read through color_height_map (a heat gradient).
-/// - p1_planet_atmosphere_scattering: thin shell; colour color_Atmo, seen as a rim.
+/// Planets, moons and their atmosphere shells: PlanetShaders.
 /// X4's textures for additive layers carry no alpha: these shaders never use it there (the old fallback multiplied
 /// by alpha = 0 and drew nothing).
 /// </summary>
@@ -134,23 +134,12 @@ void fragment() {
 }
 ";
 
-    // atmosphere: a coloured rim
-    const string AtmoCode = "shader_type spatial;\nrender_mode unshaded, blend_add, cull_disabled, depth_draw_never, fog_disabled;\n" + @"
-uniform vec3 colour = vec3(0.35, 0.55, 1.0);
-uniform float strength = 1.0;
-void fragment() {
-    float rim = 1.0 - clamp(abs(dot(NORMAL, VIEW)), 0.0, 1.0);
-    ALBEDO = colour * pow(rim, 2.5) * strength;
-}
-";
-
-    static Shader? _glow, _starfield, _sky, _ring, _sun, _atmo;
+    static Shader? _glow, _starfield, _sky, _ring, _sun;
     static Shader S(ref Shader? s, string code) => s ??= new Shader { Code = code };
 
     /// <summary>True for the backdrop shaders these imitate.</summary>
     public static bool Handles(MaterialLibrary.Material x) =>
-        x.Shader is "p1_stars" or "p1_starfield" or "p1_simple_unlit" or "p1_complex_unlit" or "p1_planet_sun"
-        || x.BlendMode == "PLANET_ATMOSPHERE" || x.Shader == "p1_planet_atmosphere_scattering";
+        x.Shader is "p1_stars" or "p1_starfield" or "p1_simple_unlit" or "p1_complex_unlit" or "p1_planet_sun";
 
     /// <summary>The Godot material for a backdrop material; null when it is none of those.</summary>
     public static Material? Build(MaterialLibrary.Material x, Func<string, Texture2D?> tex)
@@ -164,13 +153,6 @@ void fragment() {
         // strong strengths (diffuseStr 40 on a sun shell) are meant for X4's HDR exposure: kept, but softened
         float Str(float s) => s <= 1f ? s : 1f + MathF.Log(s);
 
-        if (x.Shader == "p1_planet_atmosphere_scattering" || x.BlendMode == "PLANET_ATMOSPHERE")
-        {
-            var m = new ShaderMaterial { Shader = S(ref _atmo, AtmoCode) };
-            m.SetShaderParameter("colour", C("color_Atmo", new Vector3(0.35f, 0.55f, 1f)) * 1.6f);
-            m.SetShaderParameter("strength", Math.Clamp(F("fDensity", 1f), 0.3f, 1.5f));
-            return m;
-        }
         if (x.Shader == "p1_planet_sun")
         {
             var m = new ShaderMaterial { Shader = S(ref _sun, SunCode) };

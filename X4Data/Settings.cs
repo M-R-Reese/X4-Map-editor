@@ -16,6 +16,8 @@ public sealed class Settings
     public List<string> ExtractedFolders { get; set; } = new();
     /// <summary>Where the mod export goes (default: the game's extensions folder).</summary>
     public string ExportFolder { get; set; } = "";
+    /// <summary>Performance mode: no X4 look shaders (hulls, sky, planets), no glow, no anti-aliasing (View menu).</summary>
+    public bool PerformanceMode { get; set; }
 
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 

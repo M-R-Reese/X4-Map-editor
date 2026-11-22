@@ -19,6 +19,7 @@ public static class GameXml
         {
             var p = "extensions/" + ext.FolderName + "/" + relPath;
             if (!vfs.Exists(p)) continue;
+            if (doc != null && !vfs.Changes(ext.FolderName)) continue;     // outside the project's scope: no changes to what is there
             XDocument part;
             try { part = Parse(vfs.Read(p)); }
             catch (Exception e) { notes?.Add($"{p}: not readable ({e.Message})"); continue; }

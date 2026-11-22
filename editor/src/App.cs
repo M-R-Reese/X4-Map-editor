@@ -16,13 +16,13 @@ public record Selection(string Kind, int Id);
 /// Main window: top bar, galaxy map (2D) or sector view (3D), side panel, status line.
 /// Holds the project, undo / redo, selection and the open file. Every edit goes through Change().
 /// Command line for checks (after "--"): --open file.json, --sector id, --select gate:id / decor:id, --flipnormals, --debugreport (with --screenshot), --debugwindow, --palette group, --menu, --patch galaxymacro, --setup,
-/// --view pitch,yaw, --play musicid, --screenshot file.png.
+/// --view pitch,yaw, --play musicid, --screenshot file.png, --performance (performance mode for this run, not saved), --allpreviews (time all palette pictures).
 /// </summary>
 public partial class App : Control
 {
     /// <summary>Visible name and version (window title, dialogs). The Godot project name stays "X4 Galaxy Editor 3D"
     /// on purpose: it names the user data folder (settings, autosave).</summary>
-    public const string AppName = "X4 Map Editor", Version = "0.2.6 beta";
+    public const string AppName = "X4 Map Editor", Version = "0.2.7 beta";
     public Project P = new();
     public Selection? Sel;
     public int? OpenSectorId;                       // null = galaxy view
@@ -124,6 +124,14 @@ public partial class App : Control
             }
         };
         bar.AddChild(project);
+        var view = new MenuButton { Text = "View ▾", FocusMode = FocusModeEnum.None, Flat = false, TooltipText = "How the 3D views are drawn" };
+        _viewMenu = view.GetPopup();
+        _viewMenu.AddCheckItem("Performance mode", 0);
+        _viewMenu.SetItemTooltip(0, "Simple materials instead of the game's look (ships, stations, sky, planets); no nebulae, gas clouds, glows, "
+            + "atmospheres or other effects; no smoothing. "
+            + "Faster on weak graphics cards and laptops. Saved for the next start.");
+        _viewMenu.IdPressed += id => { if (id == 0) SetPerformance(!_viewMenu.IsItemChecked(0), true); };
+        bar.AddChild(view);
         bar.AddChild(new VSeparator());
         IconBtn(bar, SaveSvg, () => Save(false), "Save (Ctrl+S)");
         _undoBtn = IconBtn(bar, UndoSvg, Undo, "Undo (Ctrl+Z)"); _redoBtn = IconBtn(bar, RedoSvg, Redo, "Redo (Ctrl+Y)");
@@ -212,6 +220,7 @@ public partial class App : Control
 
     public void Refresh()
     {
+        CheckDataScope();
         bool inSector = OpenSectorId != null;
         _galaxy.Visible = !inSector; _sector.Visible = inSector;
         _undoBtn.Disabled = _undo.Count == 0; _redoBtn.Disabled = _redo.Count == 0;
@@ -282,6 +291,7 @@ public partial class App : Control
     {
         var s = P.SectorById(OpenSectorId);
         if (s == null) return;
+        if (ReadOnly && item.Kind != "station") { SetStatus("A sector of the galaxy you patch: only pirate stations can be added here."); return; }
         if (item.Kind == "station")             // palette group "Stations": Ref = kind:faction:stations.xml id
         {
             var parts = item.Ref.Split(':');
@@ -399,19 +409,42 @@ public partial class App : Control
     {
         var key = ContentScope;
         if (_scopeFor == key && _scope != null) return _scope;
+        var set = ScopeOf(EditP, Game?.Vfs.Extensions.All ?? new());
+        _scopeFor = key; _scope = set;
+        return set;
+    }
+
+    /// <summary>A project's mod scope: its galaxy's mod (patch) and its allowed mods, with their dependencies (folder names).</summary>
+    static HashSet<string> ScopeOf(Project p, IReadOnlyList<X4Data.Vfs.Extension> all)
+    {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var all = Game?.Vfs.Extensions.All ?? new();
         void Add(X4Data.Vfs.Extension? e)
         {
             if (e == null || !set.Add(e.FolderName)) return;
             foreach (var d in e.Dependencies) Add(all.FirstOrDefault(x => x.Id.Equals(d.Id, StringComparison.OrdinalIgnoreCase)));
         }
-        var p = EditP;
         foreach (var f in p.AllowedMods.Append(p.BaseGalaxy != null ? p.BaseSource : null))
             if (f != null && f != "base") Add(all.FirstOrDefault(e => e.FolderName.Equals(f, StringComparison.OrdinalIgnoreCase)));
-        _scopeFor = key; _scope = set;
+        // the project's own exported mod is NOT in it: the editor shows the project, not its last export
         return set;
     }
+
+    static string ScopeKey(IEnumerable<string> set) => string.Join(",", set.Select(x => x.ToLowerInvariant()).OrderBy(x => x));
+
+    /// <summary>The mod scope the game data was read for (GameData: only these mods change it).</summary>
+    string? _dataScope;
+
+    /// <summary>Another project / allowed mods: when its mod scope differs from the one the game data was read for,
+    /// the game files are read again (loading window), so other mods' changes stay out.</summary>
+    void CheckDataScope()
+    {
+        if (Game == null || _loading != null || _dataScope == null) return;
+        if (ScopeKey(ScopeOf(EditP, Game.Vfs.Extensions.All)) == _dataScope) return;
+        _dataScope = null;                                         // once: StartGame sets it again
+        CallDeferred(nameof(ReloadGameData));
+    }
+
+    void ReloadGameData() => StartGame(Settings.Load(SettingsFile));
     string? _scopeFor; HashSet<string>? _scope;
 
     /// <summary>Changes when the allowed content changes (another project / galaxy / allowed mods): the palette rebuilds itself then.</summary>
@@ -482,7 +515,7 @@ public partial class App : Control
 
     public void AddStation(string kind, double x, double z)
     {
-        if (ReadOnly || P.SectorById(OpenSectorId) is not { } s) return;
+        if (P.SectorById(OpenSectorId) is not { } s || ReadOnly && !PirateOnly(kind)) return;
         var owners = StationOwners(kind);
         string faction = s.Ai?.Owner is { } o && owners.Any(t => t.Faction == o) ? o : owners.FirstOrDefault().Faction ?? "argon";
         AddStation(kind, faction, kind == "piratebase" ? owners.FirstOrDefault(t => t.Faction == faction).Ref : null, x, z);
@@ -491,7 +524,21 @@ public partial class App : Control
     /// <summary>New station of this kind and owner in the open sector (factory: the owner's first product).</summary>
     public void AddStation(string kind, string faction, string? sref, double x, double z)
     {
-        if (ReadOnly || P.SectorById(OpenSectorId) is not { } s) return;
+        if (ReadOnly)
+        {
+            // a sector of the galaxy you patch: pirate stations only, kept in the project (BaseStations)
+            if (!PirateOnly(kind) || _roSector == null) return;
+            var sector = _roSector;
+            ChangeBase(e =>
+            {
+                var bs = new BaseStation { Id = e.NextId++, SectorMacro = sector.Macro, SectorName = sector.Name, Faction = faction, Ref = sref, X = Math.Round(x), Z = Math.Round(z) };
+                e.BaseStations.Add(bs);
+                return bs.Id;
+            }, newId => P.ViewBaseStations.FirstOrDefault(kv => kv.Value == newId).Key is var vid && vid != 0 ? new Selection("station", vid) : null);
+            SetStatus("Pirate station added to this sector of the galaxy you patch: the export puts it there (god.xml), running games get it too.");
+            return;
+        }
+        if (P.SectorById(OpenSectorId) is not { } s) return;
         Change(() =>
         {
             var st = P.AddStation(s, kind, faction, x, z);
@@ -499,6 +546,14 @@ public partial class App : Control
             if (kind == "factory") st.Ware = Factions?.ProductWares.GetValueOrDefault(faction)?.FirstOrDefault() ?? "energycells";
             Sel = new Selection("station", st.Id);
         });
+    }
+
+    /// <summary>In a sector of the galaxy you patch only pirate stations can be added; false (with a status line) for others.</summary>
+    bool PirateOnly(string kind)
+    {
+        if (kind == "piratebase") return true;
+        SetStatus("A sector of the galaxy you patch: only pirate stations can be added here.");
+        return false;
     }
 
     /// <summary>
@@ -537,7 +592,7 @@ public partial class App : Control
         P = view;
         OpenSectorId = view.Clusters[0].Sectors[0].Id; Sel = null; Tool = "select";
         Refresh(); _sector.ShowSector();
-        SetStatus($"{s.Name} ({(s.Source == "base" ? "vanilla" : s.Source)}), read-only: gates, fields, resources, backdrop. Stations, wrecks and data vaults are not shown."
+        SetStatus($"{s.Name} ({(s.Source == "base" ? "vanilla" : s.Source)}), read-only: gates, fields, resources, backdrop. Its own stations, wrecks and data vaults are not shown. You can add pirate stations (Stations palette, right-click)."
             + (view.ViewBaseGates.Count > 0 ? "   Your patch's new gate CAN be moved: drag it, or select it for arrows / ring." : "") + "   Esc: back");
     }
 
@@ -554,14 +609,26 @@ public partial class App : Control
     }
 
     /// <summary>Can this item of the open sector be moved? In a read-only sector only the new gates of our patch.</summary>
-    public bool Movable(string kind, int id) => !ReadOnly || (kind == "gate" && P.ViewBaseGates.ContainsKey(id));
+    public bool Movable(string kind, int id) => !ReadOnly || (kind == "gate" && P.ViewBaseGates.ContainsKey(id)) || (kind == "station" && P.ViewBaseStations.ContainsKey(id));
+
+    /// <summary>A change of the edited project while a patched sector is shown (one undo step); the view is built again.
+    /// edit returns a value select uses to pick the new selection in the rebuilt view.</summary>
+    void ChangeBase(Func<Project, int> edit, Func<int, Selection?> select)
+    {
+        _undo.Push(_editP!.ToJson()); if (_undo.Count > 200) TrimUndo();
+        _redo.Clear();
+        var r = edit(_editP);
+        _dirty = true; Autosave();
+        RebuildView();
+        Sel = select(r); Refresh();
+    }
 
     /// <summary>The read-only view built again from the edited project (after a move, undo, redo); selection and camera stay.</summary>
     void RebuildView()
     {
         if (!ReadOnly || Base == null || _roCluster == null || _roSector == null) return;
         P = Base.ReadOnlyView(_roCluster, _roSector, _editP!);
-        if (Sel != null && P.GateById(Sel.Id) == null && P.DecorById(Sel.Id) == null) Sel = null;
+        if (Sel != null && P.GateById(Sel.Id) == null && P.DecorById(Sel.Id) == null && P.StationById(Sel.Id) == null) Sel = null;
         Refresh();
     }
 
@@ -582,16 +649,33 @@ public partial class App : Control
                 if (g.X != o.X || g.Y != o.Y || g.Z != o.Z || g.Yaw != o.Yaw) moves.Add((bid, g.X, g.Y, g.Z, g.Yaw));   // copied: g is reset below
                 g.X = o.X; g.Y = o.Y; g.Z = o.Z; g.Yaw = o.Yaw;               // to see if anything ELSE changed
             }
+        // our pirate stations: their state after the edit (null = deleted); then put back to see if anything ELSE changed
+        var stations = new List<(int baseId, Station? now)>();
+        var afterSec = after.SectorById(OpenSectorId); var origSec = orig.SectorById(OpenSectorId);
+        foreach (var (vid, bid) in P.ViewBaseStations)
+        {
+            var now = after.StationById(vid); var was = orig.StationById(vid);
+            if (was == null) continue;
+            if (now == null || now.X != was.X || now.Y != was.Y || now.Z != was.Z || now.Yaw != was.Yaw || now.Faction != was.Faction || now.Ref != was.Ref)
+                stations.Add((bid, now == null ? null : new Station { X = now.X, Y = now.Y, Z = now.Z, Yaw = now.Yaw, Faction = now.Faction, Ref = now.Ref }));
+        }
+        if (afterSec != null && origSec != null) { afterSec.Stations.Clear(); afterSec.Stations.AddRange(origSec.Stations); }
         bool other = after.ToJson() != before;
-        if (moves.Count > 0)
+        if (moves.Count > 0 || stations.Count > 0)
         {
             _undo.Push(_editP!.ToJson()); if (_undo.Count > 200) TrimUndo();
             _redo.Clear();
             foreach (var (bid, x, y, z, yaw) in moves)
                 if (_editP.BaseGateById(bid) is { } bg) { bg.X = x; bg.Y = y; bg.Z = z; bg.Yaw = GalaxyOps.NormYaw(yaw); }
+            foreach (var (bid, now) in stations)
+                if (_editP.BaseStations.FirstOrDefault(b => b.Id == bid) is { } bs)
+                {
+                    if (now == null) { _editP.BaseStations.Remove(bs); continue; }
+                    bs.X = now.X; bs.Y = now.Y; bs.Z = now.Z; bs.Yaw = GalaxyOps.NormYaw(now.Yaw); bs.Faction = now.Faction; bs.Ref = now.Ref;
+                }
             _dirty = true; Autosave();
         }
-        if (other) SetStatus("Read-only: this sector belongs to the galaxy you patch; only your patch's new gates can be moved. Ctrl+C copies a field to paste it into your own sector.");
+        if (other) SetStatus("Read-only: this sector belongs to the galaxy you patch; only your patch's new gates and pirate stations can be changed. Ctrl+C copies a field to paste it into your own sector.");
         RebuildView();
     }
 
@@ -679,6 +763,22 @@ public partial class App : Control
         catch (Exception e) { Alert(e.Message); return; }
         _file = f; _undo.Clear(); _redo.Clear(); Sel = null; OpenSectorId = null; _dirty = false; Autosave();
         AddRecent(f); LoadBase();
+        WarmProject("Building the project's models");
+    }
+
+    /// <summary>The warm-up (SectorView.WarmUp) with the loading window, after the start: another project opened,
+    /// performance mode switched. Not while the start-up is still loading (it warms up at its end).</summary>
+    async void WarmProject(string what)
+    {
+        if (Conv == null || _loading != null) return;
+        var bar = _loading = new LoadingBar(); AddChild(bar);
+        try
+        {
+            bar.Step(what, 0);
+            await _sector.WarmUp(EditP, (f, item) => bar.Progress(f, item));
+        }
+        catch (Exception e) { DebugLog.Add("warm-up failed: " + e.Message); }
+        finally { bar.QueueFree(); if (_loading == bar) _loading = null; }
     }
 
     void Save(bool ask)
@@ -836,20 +936,66 @@ public partial class App : Control
         }
     }
 
+    /// <summary>More palette pictures missing than this: they are made in the loading window (first start), else in the background.</summary>
+    const int PicturesInLoading = 40;
+
+    PopupMenu _viewMenu = null!;
+
+    /// <summary>Performance mode on / off (View menu); save = remember it in the settings file.</summary>
+    void SetPerformance(bool on, bool save)
+    {
+        _viewMenu.SetItemChecked(0, on);
+        _sector.SetPerformance(on);
+        if (save) { var st = Settings.Load(SettingsFile); st.PerformanceMode = on; st.Save(SettingsFile); WarmProject(on ? "Performance mode: building the models again" : "Game look: building the models again"); }
+        SetStatus(on ? "Performance mode: simple materials, no effects, no smoothing." : "Performance mode off: the game's look.");
+    }
+
+    /// <summary>True while the loading window is open (game files, lists, warm-up).</summary>
+    public bool Loading => _loading != null;
+    LoadingBar? _loading;
+
     async void StartGame(Settings s)
     {
         SetStatus("Reading the game files ...");
+        _loading?.QueueFree();
+        _loading = new LoadingBar(); AddChild(_loading);
+        var bar = _loading;
         try
         {
-            Game = await Task.Run(() => new GameData(s));
-            Backdrops = await Task.Run(() => X4Data.Space.Backdrops.List(Game));
-            Texts = await Task.Run(() => new X4Data.Text.TextDb(Game, 44));
-            Decor = await Task.Run(() => new X4Data.Space.DecorCatalog(Game, Texts));
-            Factions = await Task.Run(() => new X4Data.Galaxy.FactionCatalog(Game, Texts));
-            Starts = await Task.Run(() => new X4Data.Galaxy.StartCatalog(Game, Texts));
+            // start-up times go to the debug log (debug report): where loading spends its time
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            void Took(string what) { DebugLog.Add($"start: {what} {clock.ElapsedMilliseconds} ms"); GD.Print($"start: {what} {clock.ElapsedMilliseconds} ms"); clock.Restart(); }
+            bar.Step("Reading the game files and the mod list", 0.02);
+            // only the open project's mods may change the game data (its galaxy's mod, allowed mods, dependencies)
+            _sector.DropModels();                                   // models of an earlier read
+            var scopeP = EditP;
+            Game = await Task.Run(() => new GameData(s, ext => ScopeOf(scopeP, ext.All))); Took("game files");
+            _dataScope = ScopeKey(ScopeOf(scopeP, Game.Vfs.Extensions.All));
+            DebugLog.Add($"start: mods that may change the game data: {(_dataScope == "" ? "Egosoft only" : _dataScope)}");
+            bar.Step("Reading the texts", 0.12);
+            Texts = await Task.Run(() => new X4Data.Text.TextDb(Game, 44)); Took("texts");
+            // the lists need only the game files and the texts: side by side
+            bar.Step("Reading backdrops, decorations, factions and game starts", 0.16);
+            var g = Game; var t = Texts;
+            var tB = Task.Run(() => X4Data.Space.Backdrops.List(g));
+            var tD = Task.Run(() => new X4Data.Space.DecorCatalog(g, t));
+            var tF = Task.Run(() => new X4Data.Galaxy.FactionCatalog(g, t));
+            var tS = Task.Run(() => new X4Data.Galaxy.StartCatalog(g, t));
+            var names = new System.Collections.Generic.Dictionary<Task, string> { [tB] = "backdrops", [tD] = "decorations", [tF] = "factions", [tS] = "game starts" };
+            var open = new System.Collections.Generic.List<Task> { tB, tD, tF, tS };
+            while (open.Count > 0)
+            {
+                var done = await Task.WhenAny(open); open.Remove(done);
+                await done;                                                         // passes an exception on
+                DebugLog.Add($"start: {names[done]} ready after {clock.ElapsedMilliseconds} ms");
+                bar.Progress(0.16 + 0.24 * (4 - open.Count) / 4.0, names[done] + " ready");
+            }
+            Took("lists (side by side)");
+            Backdrops = tB.Result; Decor = tD.Result; Factions = tF.Result; Starts = tS.Result;
             AddStationItems();
             Music.SetGame(Game);
             Conv = new X4ToGodot(Game);
+            SetPerformance(s.PerformanceMode || Array.IndexOf(OS.GetCmdlineUserArgs(), "--performance") >= 0, false);   // check runs: --performance
             if (OS.GetCmdlineUserArgs() is var a && Array.IndexOf(a, "--play") is var pi && pi >= 0 && pi + 1 < a.Length) Music.Play(a[pi + 1]);   // check of the music
             Refresh();
             _gameInfo = $"      |  Game files: {Game.Vfs.Count:N0} files, {Game.Vfs.Extensions.LoadOrder.Count} extensions";
@@ -863,8 +1009,30 @@ public partial class App : Control
             if (_pendingPatch != null && BaseGalaxy.Installed(Game).FirstOrDefault(i => i.Macro.Equals(_pendingPatch, StringComparison.OrdinalIgnoreCase)) is { } pp)
             { _pendingPatch = null; NewPatchProject(pp); }
             if (_paletteGroup != null) _sector.Palette.OpenGroup(_paletteGroup);
+            Took("set-up");
+            // first start (folders just set), a new picture style or new DLCs: the palette pictures are made here, once
+            // per PC (about a minute; nothing of the game is shipped with the editor). Few missing: in the background.
+            bool pictures = Previews.MissingEgosoft().Count > PicturesInLoading || Array.IndexOf(OS.GetCmdlineUserArgs(), "--allpreviews") >= 0;
+            double warmEnd = pictures ? 0.70 : 1.0;
+            bar.Step("Building the project's models: gates, stations, objects, backdrops", 0.40);
+            await _sector.WarmUp(EditP, (f, item) => bar.Progress(0.40 + (warmEnd - 0.40) * f, item));
+            Took("warm-up");
+            if (pictures)
+            {
+                int total = Previews.RequestAllEgosoft();
+                bar.Step($"First start: making the palette pictures ({total}, once per PC)", warmEnd);
+                while (Previews.Pending > 0)
+                {
+                    int left = Previews.Pending;
+                    bar.Progress(warmEnd + (1 - warmEnd) * (total - left) / Math.Max(1, total), $"{total - left} / {total}   {Previews.CurrentLabel}");
+                    await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+                }
+                Took("palette pictures");
+            }
+            SetStatus("Ready.");
         }
         catch (Exception e) { SetStatus("Game files could not be read: " + e.Message); }
+        finally { bar.QueueFree(); if (_loading == bar) _loading = null; }
     }
 
     // ---------------------------------------------------------------------------------------------- keys, screenshot
@@ -948,6 +1116,7 @@ public partial class App : Control
     {
         if (_shotFrames < 0 || --_shotFrames > 0) return;
         if (Conv == null && _shotFrames == 0 && OpenSectorId != null) { _shotFrames = 30; return; }   // wait until game files and models are ready
+        if (_shotFrames == 0 && Loading) { _shotFrames = 30; return; }                                 // and until the loading window is closed
         if (_shotFrames == 0 && (_pendingPatch != null || (P.BaseGalaxy != null && Base == null))) { _shotFrames = 30; return; }   // patch: wait for the base galaxy
         if (_shotFrames == 0 && _baseSector == "gate" && Base != null && EditP.BaseGates.FirstOrDefault(b => b.Existing == null) is { } firstNew)
         {

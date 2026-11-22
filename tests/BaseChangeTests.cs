@@ -24,11 +24,23 @@ static class BaseChangeTests
         p.BaseClusters.Add(new BaseClusterChange { Macro = apc.Macro, Q = free.q, R = free.r });
         p.BaseSectors.Add(new BaseSectorChange { Macro = ap.Macro, Sunlight = 2.5, Security = 0.1,
             Res = new() { new ResourceArea { Amount = 3, Size = "large", Ware = "ore", Yield = "high", Speed = "fast" } } });
+        // a pirate station our patch puts into the vanilla sector (2026-11-22)
+        p.BaseStations.Add(new BaseStation { Id = p.NextId++, SectorMacro = ap.Macro, SectorName = ap.Name, Faction = "scaleplate", Ref = "pirate_piratebase", X = 120_000, Z = -80_000, Yaw = 45 });
         var o = new ModExport.Options { Base = b, MacroFile = m => game.MacroFile(m), ObjectClass = _ => null };
         var files = ModExport.Build(p, o);
         ModExport.Write(Path.Combine(Path.GetTempPath(), "x4mapeditor_test", "tc_change"), files);
         var gtext = files.GetValueOrDefault(info.File) ?? "";
         check("patch: galaxy diff only moves the cluster (no empty add of own clusters)", gtext.Contains("/offset/position/@x") && !gtext.Contains("/connections\">"), gtext.Length > 400 ? gtext[..400] : gtext);
+        var god = files.GetValueOrDefault("libraries/god.xml") ?? "";
+        var apMacro = ap.Macro.EndsWith("_macro", StringComparison.OrdinalIgnoreCase) ? ap.Macro : ap.Macro + "_macro";
+        check("patch: pirate station in a vanilla sector goes to god.xml at its place in that sector",
+            god.Contains($"id=\"tc_bst_{p.BaseStations[0].Id:000}\"") && god.Contains($"macro=\"{apMacro}\"") && god.Contains("x=\"120000\"") && god.Contains("tags=\"[piratebase]\""),
+            god.Length > 600 ? god[..600] : god);
+        check("patch: running games get the pirate station too (MD create_god_station)",
+            files.Any(f => f.Key.StartsWith("md/") && f.Value.Contains($"tc_bst_{p.BaseStations[0].Id:000}") && f.Value.Contains("create_god_station")), "");
+        var view = b.ReadOnlyView(apc, ap, p);
+        check("read-only view of the vanilla sector shows the patch's pirate station (editable)",
+            view.ViewBaseStations.Count == 1 && view.Clusters[0].Sectors[0].Stations.Any(st => st.Ref == "pirate_piratebase" && st.X == 120_000), $"{view.ViewBaseStations.Count} mapped");
 
         var galaxy = GameXml.Load(game.Vfs, info.File)!;
         var notes = new List<string>();

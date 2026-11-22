@@ -304,6 +304,20 @@ public static class ModExport
                     stn.Append($"    <station id=\"{id}\" race=\"{race}\" owner=\"{Xa(st.Faction)}\" type=\"{(st.Faction == "xenon" && st.Kind == "defence" ? "defence" : k.Type)}\">\n{loc}      <station>\n        <select faction=\"{Xa(st.Faction)}\" tags=\"[{k.Tag}]\" />\n        <loadout>\n          <level exact=\"1.0\" />\n        </loadout>\n      </station>\n    </station>\n");
             }
         }
+        // ---- PATCH: pirate stations in sectors of the patched galaxy (vanilla or another mod's)
+        if (patch)
+            foreach (var bs in p.BaseStations)
+            {
+                var f = o.Factions?.Get(bs.Faction);
+                var pt = o.Factions?.Stations.FirstOrDefault(t => t.Id == bs.Ref && t.Faction.Equals(bs.Faction, StringComparison.OrdinalIgnoreCase));
+                if (f != null && f.Source != "base") extraDeps.Add(f.Source);
+                if (pt != null && pt.Source != "base") extraDeps.Add(pt.Source);
+                var id = $"{p.Prefix}_bst_{Pad(bs.Id)}";
+                var macro = bs.SectorMacro.EndsWith("_macro", StringComparison.OrdinalIgnoreCase) ? bs.SectorMacro[..^6] : bs.SectorMacro;
+                stn.Append($"    <!-- {Xa(bs.SectorName)}: pirate station of the patch -->\n");
+                stn.Append(GodStation(id, f?.Race ?? "argon", bs.Faction, "piratebase", pt?.Tag ?? "piratebase", macro, new Spot { X = bs.X, Y = bs.Y, Z = bs.Z, Yaw = bs.Yaw }));
+                godStations.Add(id);
+            }
         if (p.ReplaceVanillaStations && !patch)
             files["libraries/god.xml"] = Head + $"<diff>\n  <replace sel=\"/god\">\n    <god>\n      <products>\n{prod}      </products>\n      <stations>\n{stn}      </stations>\n    </god>\n  </replace>\n</diff>\n";
         else if (stn.Length > 0 || prod.Length > 0)

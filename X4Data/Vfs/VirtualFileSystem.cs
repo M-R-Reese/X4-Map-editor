@@ -13,6 +13,26 @@ public sealed class VirtualFileSystem
     readonly Dictionary<string, VfsFile> _files = new(StringComparer.OrdinalIgnoreCase);
 
     public ExtensionList Extensions { get; }
+
+    /// <summary>
+    /// Which extensions may CHANGE the game data (diffs, entries merged into another file's list, texts that replace
+    /// others): null = all. Egosoft's always may. A mod outside it still adds its own files (its galaxy, models, new
+    /// names), but cannot change what the project uses: a total conversion installed next to a vanilla project no
+    /// longer switches off the vanilla factions (2026-11-22, Star Wars Interworlds). Set by GameData.
+    /// </summary>
+    public Func<string, bool>? InScope { get; set; }
+
+    /// <summary>May this extension (folder name) change the game data? (InScope; Egosoft's always.)</summary>
+    public bool Changes(string folderName) =>
+        InScope == null || folderName.StartsWith("ego_", StringComparison.OrdinalIgnoreCase) || InScope(folderName);
+
+    /// <summary>The extension folder of a file path ("extensions/x/..."), or null for the base game.</summary>
+    public static string? ExtensionOf(string path)
+    {
+        if (!path.StartsWith("extensions/", StringComparison.OrdinalIgnoreCase)) return null;
+        int end = path.IndexOf('/', 11);
+        return end > 11 ? path[11..end] : null;
+    }
     public int Count => _files.Count;
     public IEnumerable<VfsFile> Files => _files.Values;
 

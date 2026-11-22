@@ -64,7 +64,10 @@ public sealed class DecorVisuals
         return (Object(d.Ref), "■", label, new Color("e6e6e6"));
     }
 
-    Node3D Object(string macro)
+    /// <summary>The model of an object decoration (template, built once; null = none). Warm-up: SectorView.WarmUp.</summary>
+    public Node3D? Template(Decoration d) => d.Kind == "region" ? null : ObjectTemplate(d.Ref);
+
+    Node3D? ObjectTemplate(string macro)
     {
         if (!_objects.TryGetValue(macro, out var tpl) && _app.Conv != null)
         {
@@ -72,7 +75,12 @@ public sealed class DecorVisuals
             if (tpl.GetChildCount() == 0) { tpl.Free(); tpl = null; }
             _objects[macro] = tpl;
         }
-        if (tpl != null) return (Node3D)tpl.Duplicate();
+        return tpl;
+    }
+
+    Node3D Object(string macro)
+    {
+        if (ObjectTemplate(macro) is { } tpl) return (Node3D)tpl.Duplicate();
         var box = new Node3D();
         box.AddChild(new MeshInstance3D { Mesh = new BoxMesh { Size = new Vector3(800, 800, 800) } });
         return box;
@@ -125,7 +133,9 @@ public sealed class DecorVisuals
         }
         lines.SurfaceEnd();
         root.AddChild(new MeshInstance3D { Mesh = lines, CastShadow = GeometryInstance3D.ShadowCastingSetting.Off });
-        if (samples.Count > 0) root.AddChild(Fill(def, samples, rnd, Preview));
+        // performance mode: no gas / nebula puffs (hundreds of see-through spheres over each other); rocks stay
+        bool puffs = def.Category is not ("Asteroid field" or "Wreck field");
+        if (samples.Count > 0 && !(puffs && _app.Conv is { Simple: true } && !Preview)) root.AddChild(Fill(def, samples, rnd, Preview));
         return root;
     }
 

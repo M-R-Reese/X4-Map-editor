@@ -132,6 +132,25 @@ public partial class Previews : Node
 
     public void MakeModPreviews() { foreach (var i in ModItemsWithout()) Request(i); }
 
+    /// <summary>Egosoft items (vanilla + DLC) without a picture yet: many on a first start (folders just set).</summary>
+    public List<DecorCatalog.Item> MissingEgosoft() =>
+        _app.Decor?.Items.Where(i => i.Egosoft && Get(i, false) == null).ToList() ?? new();
+
+    /// <summary>Queues every Egosoft item without a picture; the time it takes goes to the log. Returns how many.
+    /// First start: the loading window waits for them (App.StartGame); check run --allpreviews.</summary>
+    public int RequestAllEgosoft()
+    {
+        var missing = MissingEgosoft();
+        foreach (var i in missing) Request(i);
+        _timing = System.Diagnostics.Stopwatch.StartNew(); _timed = missing.Count;
+        return missing.Count;
+    }
+
+    /// <summary>The item being pictured now (loading window detail).</summary>
+    public string? CurrentLabel => _current?.Label;
+
+    System.Diagnostics.Stopwatch? _timing; int _timed;
+
     public override void _Process(double delta)
     {
         if (_app.Conv == null || _app.Decor == null) return;            // models need the game files
@@ -141,7 +160,11 @@ public partial class Previews : Node
             Capture();
             return;
         }
-        if (_queue.Count == 0) return;
+        if (_queue.Count == 0)
+        {
+            if (_timing != null) { var line = $"previews: {_timed} made in {_timing.ElapsedMilliseconds / 1000.0:F1} s"; GD.Print(line); DebugLog.Add(line); _timing = null; }
+            return;
+        }
         var item = _queue[0]; _queue.RemoveAt(0); _queued.Remove(Key(item));
         if (Get(item, false) != null) return;                          // made meanwhile (or shipped)
         Stage(item);

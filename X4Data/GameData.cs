@@ -16,11 +16,15 @@ public sealed class GameData
     readonly Dictionary<string, string> _components = new(StringComparer.OrdinalIgnoreCase);
     Materials.MaterialLibrary? _materials;
 
-    public GameData(Settings s)
+    /// <param name="scope">The extension folders that may change the game data (VirtualFileSystem.InScope), from the
+    /// installed extensions; null = all (as the game itself).</param>
+    public GameData(Settings s, Func<ExtensionList, ISet<string>?>? scope = null)
     {
         Vfs = VirtualFileSystem.Build(s);
+        // the index of every mod: names -> files; a mod's own models / backdrops stay findable (they are offered only when allowed)
         ReadIndex("index/macros.xml", _macros);
         ReadIndex("index/components.xml", _components);
+        if (scope?.Invoke(Vfs.Extensions) is { } set) Vfs.InScope = set.Contains;
     }
 
     void ReadIndex(string path, Dictionary<string, string> into)

@@ -61,6 +61,9 @@ public static class Assembly
                 if (childName == null || at == null) continue;
                 var con = comp.Connections.FirstOrDefault(c => c.Name.Equals(at, StringComparison.OrdinalIgnoreCase));
                 if (con == null || SkipTags.Any(con.HasTag)) continue;
+                // interiors (walkable rooms of docks and ships) are never seen from outside: a dock area's room alone
+                // held most of its million vertices (2026-11-22)
+                if ((string?)g.Macro(childName)?.Attribute("class") == "room") continue;
                 var where = comp.ConnectionTransform(con);
                 foreach (var p in Build(g, childName, lod, notes, depth + 1))
                     list.Add(p with { PartName = childName + "/" + p.PartName, Transform = p.Transform * where });

@@ -30,6 +30,7 @@ public partial class SectorView : Control
     public DecorPalette Palette { get; private set; } = null!;
     bool _placed;                                                   // the click placed an item: its release must not deselect
     DecorVisuals _visuals = null!;
+    Godot.Environment _bgEnv = null!, _env = null!;
     string? _shownBackdrop;
     readonly Dictionary<string, Node3D?> _backdrops = new();  // backdrop component -> template
     readonly Dictionary<string, Node3D?> _models = new();     // gate macro -> template built once from the game files
@@ -68,7 +69,7 @@ public partial class SectorView : Control
         bgBox.SetAnchorsPreset(LayoutPreset.FullRect); AddChild(bgBox);
         _bgVp = new SubViewport { OwnWorld3D = true, Msaa3D = Viewport.Msaa.Msaa2X };
         bgBox.AddChild(_bgVp);
-        _bgVp.AddChild(new WorldEnvironment { Environment = new Godot.Environment
+        _bgVp.AddChild(new WorldEnvironment { Environment = _bgEnv = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.Color, BackgroundColor = new Color(0.012f, 0.016f, 0.03f),
             AmbientLightSource = Godot.Environment.AmbientSource.Color, AmbientLightColor = new Color(0.3f, 0.35f, 0.5f), AmbientLightEnergy = 0.08f,
@@ -83,7 +84,7 @@ public partial class SectorView : Control
         box.SetAnchorsPreset(LayoutPreset.FullRect); AddChild(box);
         _vp = new SubViewport { OwnWorld3D = true, Msaa3D = Viewport.Msaa.Msaa2X, HandleInputLocally = true, TransparentBg = true };
         box.AddChild(_vp);
-        _vp.AddChild(new WorldEnvironment { Environment = new Godot.Environment
+        _vp.AddChild(new WorldEnvironment { Environment = _env = new Godot.Environment
         {
             BackgroundMode = Godot.Environment.BGMode.ClearColor,
             AmbientLightSource = Godot.Environment.AmbientSource.Color, AmbientLightColor = new Color(0.55f, 0.6f, 0.7f), AmbientLightEnergy = 0.15f,
@@ -131,6 +132,18 @@ public partial class SectorView : Control
     /// <summary>Rebuilds the scene of the open sector. Keeps the camera when the same sector is shown again.</summary>
     public void ShowSector()
     {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try { ShowSectorInner(); }
+        finally
+        {
+            var c = _app.Conv;
+            var line = $"sector built in {clock.ElapsedMilliseconds} ms" + (c == null ? "" : $" (all models so far: parts {c.TimeParts.ElapsedMilliseconds} ms, tangents {c.TimeTangents.ElapsedMilliseconds} ms, textures {c.TimeTextures.ElapsedMilliseconds} ms)");
+            DebugLog.Add(line); GD.Print(line);
+        }
+    }
+
+    void ShowSectorInner()
+    {
         if (_content == null) return;
         var s = _app.P.SectorById(_app.OpenSectorId);
         if (s == null) return;
@@ -170,7 +183,7 @@ public partial class SectorView : Control
         {
             bool sel = _app.Sel is { Kind: "station" } x && x.Id == st.Id;
             var colour = FactionColour(st.Faction);
-            AddItem("station", st.Id, st.X, st.Y, st.Z, StationBody(colour, st.Yaw), st.Kind == "piratebase" ? "☠" : "▣", StationText(st), sel ? new Color("ffe066") : colour);
+            AddItem("station", st.Id, st.X, st.Y, st.Z, Station(st.Kind == "piratebase" ? st.Ref : null, GalaxyOps.StationKinds.FirstOrDefault(k => k.Kind == st.Kind).Tag, st.Faction, colour, st.Yaw), st.Kind == "piratebase" ? "☠" : "▣", StationText(st), sel ? new Color("ffe066") : colour);
         }
         if (s.Ai is { } ai)
         {
@@ -179,20 +192,20 @@ public partial class SectorView : Control
             {
                 bool sel = _app.Sel is { Kind: "aiowner" } x && x.Id == s.Id;
                 var colour = FactionColour(ai.Owner);
-                AddItem("aiowner", s.Id, own.X, own.Y, own.Z, StationBody(colour, own.Yaw), "◆", $"{_app.FactionName(ai.Owner)}: owner's claim station", sel ? new Color("ffe066") : colour);
+                AddItem("aiowner", s.Id, own.X, own.Y, own.Z, Station(null, "defence", ai.Owner, colour, own.Yaw), "◆", $"{_app.FactionName(ai.Owner)}: owner's claim station", sel ? new Color("ffe066") : colour);
             }
             if (ai.PirateStation != null && ai.PirateFaction != null)
             {
                 bool sel = _app.Sel is { Kind: "aipirate" } x && x.Id == s.Id;
                 var colour = FactionColour(ai.PirateFaction);
-                AddItem("aipirate", s.Id, pir.X, pir.Y, pir.Z, StationBody(colour, pir.Yaw), "☠", $"{_app.FactionName(ai.PirateFaction)}: pirate station", sel ? new Color("ffe066") : colour);
+                AddItem("aipirate", s.Id, pir.X, pir.Y, pir.Z, Station(ai.PirateStation, null, ai.PirateFaction, colour, pir.Yaw), "☠", $"{_app.FactionName(ai.PirateFaction)}: pirate station", sel ? new Color("ffe066") : colour);
             }
         }
 
         // handles on the selected item (gates and stations turn around "up" only)
         var selItem = SelectedItem();
         var sd = selItem?.Kind == "decor" ? _app.P.DecorById(selItem.Id) : null;
-        Palette.Visible = !_app.ReadOnly;
+        Palette.Visible = true;            // read-only sectors too: pirate stations can be placed there (others are refused)
         _gizmo.Attach(selItem != null && _app.Movable(selItem.Kind, selItem.Id) ? selItem.Holder : null, sd != null, selItem != null ? _app.YawOf(selItem.Kind, selItem.Id) : 0, sd?.Pitch ?? 0, sd?.Roll ?? 0);
 
         if (_shownSector != s.Id)
@@ -351,13 +364,46 @@ public partial class SectorView : Control
         });
     }
 
+    /// <summary>Right-click in a sector of the galaxy you patch: delete one of your pirate stations, or add one at the spot.</summary>
+    void ReadOnlyMenu(Vector2 screen)
+    {
+        if (_app.Armed != null) { _app.Disarm(); return; }
+        var item = PickAt(screen);
+        var at = PlaneHit(screen, 0);
+        var menu = new PopupMenu();
+        var actions = new List<Action>();
+        void Add(string text, Action a) { menu.AddItem(text, actions.Count); actions.Add(a); }
+        if (item is { Kind: "station" } && _app.Movable(item.Kind, item.Id))
+        {
+            _app.Sel = new Selection(item.Kind, item.Id); _app.Refresh();
+            Add("Delete  (Del)", _app.DeleteSelection);
+        }
+        else if (at is { } spot)
+        {
+            var owners = _app.StationOwners("piratebase");
+            if (owners.Count == 0) return;
+            var sub = new PopupMenu { Name = "pirates" };
+            for (int i = 0; i < owners.Count; i++) sub.AddItem(owners[i].Label, i);
+            sub.IdPressed += i => _app.AddStation("piratebase", owners[(int)i].Faction, owners[(int)i].Ref, Math.Round(spot.X / 1000) * 1000, Math.Round(-spot.Z / 1000) * 1000);
+            menu.AddChild(sub);
+            menu.AddSubmenuNodeItem("Add pirate station here", sub);
+        }
+        else return;
+        menu.IdPressed += id => actions[(int)id]();
+        menu.PopupHide += () => { _app.WindowClosed(menu); menu.QueueFree(); };
+        AddChild(menu);
+        menu.Position = (Vector2I)(GetScreenPosition() + screen);
+        menu.Popup();
+        _app.OpenWindow(menu, menu.Hide);
+    }
+
     /// <summary>
     /// Right-click menu: on a gate / decoration Copy, Cut, Delete, and for gates "Connect to" a
     /// sector (new partner gate there, opposite side) or "Disconnect"; on empty space Paste at the clicked spot.
     /// </summary>
     void OnRightClicked(Vector2 screen)
     {
-        if (_app.ReadOnly) return;                                     // nothing to do in a read-only sector
+        if (_app.ReadOnly) { ReadOnlyMenu(screen); return; }          // a sector of the galaxy you patch: pirate stations only
         if (_app.Armed != null) { _app.Disarm(); return; }             // right click puts the palette item away
         var item = PickAt(screen);
         var at = PlaneHit(screen, 0);                                 // the clicked spot on the ecliptic (Godot space)
@@ -450,13 +496,7 @@ public partial class SectorView : Control
         if (name == _shownBackdrop) return;
         foreach (var c in _bgContent.GetChildren()) { _bgContent.RemoveChild(c); c.QueueFree(); }
         _shownBackdrop = name;
-        if (!_backdrops.TryGetValue(name, out var tpl))
-        {
-            tpl = _app.Conv.BuildObject(name);
-            if (tpl.GetChildCount() == 0) { tpl.Free(); tpl = null; }
-            _backdrops[name] = tpl;
-        }
-        if (tpl != null)
+        if (BackdropTemplate(name) is { } tpl)
         {
             var shown = tpl.Duplicate();
             // look checks: X4ED_BDPART=<part name> shows only that part of the backdrop
@@ -464,6 +504,111 @@ public partial class SectorView : Control
                 foreach (var ch in shown.GetChildren()) if (ch is Node3D n3 && !n3.Name.ToString().Equals(only, StringComparison.OrdinalIgnoreCase)) n3.Visible = false;
             _bgContent.AddChild(shown);
         }
+    }
+
+    Node3D? BackdropTemplate(string name)
+    {
+        if (_backdrops.TryGetValue(name, out var tpl)) return tpl;
+        if (_app.Conv == null) return null;
+        tpl = _app.Conv.BuildObject(name);
+        if (tpl.GetChildCount() == 0) { tpl.Free(); tpl = null; }
+        return _backdrops[name] = tpl;
+    }
+
+    // ---------------------------------------------------------------------------------------------- warm-up
+    /// <summary>Most backdrops built ahead: each holds big textures (video memory); the rest load when first shown.</summary>
+    const int WarmBackdrops = 24;
+
+    /// <summary>
+    /// Builds ahead what the project's sectors show (gates, stations, object decorations, the clusters' backdrops) and
+    /// draws each once in a hidden view so its shaders are compiled: opening a sector afterwards only places copies.
+    /// progress(part done 0..1, item). Runs on the main thread, one item per frame (the loading bar stays alive).
+    /// </summary>
+    public async System.Threading.Tasks.Task WarmUp(Project p, Action<double, string> progress)
+    {
+        if (_app.Conv == null) return;
+        var jobs = new List<(string Label, Func<Node3D?> Build)>();
+        var seen = new HashSet<string>();
+        void Job(string key, string label, Func<Node3D?> build) { if (seen.Add(key)) jobs.Add((label, build)); }
+        foreach (var s in p.AllSectors())
+        {
+            foreach (var g in s.Gates)
+            {
+                var macro = GateMacro(g.Type);
+                Job("model:" + macro, g.Type == "accelerator" ? "Accelerator" : "Jump gate", () => Model(macro));
+            }
+            foreach (var st in s.Stations)
+            {
+                string? sid = st.Kind == "piratebase" ? st.Ref : null, tag = GalaxyOps.StationKinds.FirstOrDefault(k => k.Kind == st.Kind).Tag;
+                var fac = st.Faction;
+                Job($"station:{sid}:{tag}:{fac}", $"Station: {_app.FactionName(fac)} {GalaxyOps.StationLabel(st.Kind).ToLowerInvariant()}", () => StationTemplate(sid, tag, fac));
+            }
+            if (s.Ai is { Owner: { } own }) Job($"station::defence:{own}", $"Station: {_app.FactionName(own)} claim station", () => StationTemplate(null, "defence", own));
+            if (s.Ai is { PirateStation: { } ps, PirateFaction: { } pf }) Job($"station:{ps}::{pf}", $"Station: {_app.FactionName(pf)} pirate station", () => StationTemplate(ps, null, pf));
+            foreach (var d in s.Decor.Where(d => d.Kind != "region"))
+                Job("decor:" + d.Ref, "Object: " + (_app.Decor?.Get(d.Kind, d.Ref)?.Label ?? d.Ref), () => _visuals.Template(d));
+        }
+        foreach (var c in p.Clusters.Take(WarmBackdrops))
+        {
+            var bd = c.BackdropComponent();
+            Job("backdrop:" + bd, $"Backdrop: {c.Name}", () => BackdropTemplate(bd));
+        }
+
+        var built = new List<Node3D>();
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < jobs.Count; i++)
+        {
+            progress(0.9 * i / Math.Max(1, jobs.Count), jobs[i].Label);
+            await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);       // the bar is drawn before the work
+            try { if (jobs[i].Build() is { } t) built.Add(t); }
+            catch (Exception e) { DebugLog.Add($"warm-up: {jobs[i].Label}: {e.Message}"); }
+        }
+        var line = $"warm-up: {jobs.Count} models in {clock.ElapsedMilliseconds} ms";
+        DebugLog.Add(line); GD.Print(line);
+        progress(0.9, "Compiling the shaders");
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        clock.Restart();
+        await CompileShaders(built);
+        line = $"warm-up: shaders in {clock.ElapsedMilliseconds} ms";
+        DebugLog.Add(line); GD.Print(line);
+        progress(1, "");
+    }
+
+    /// <summary>Draws copies of the models, each shrunk to 1 unit, for a few frames in a hidden view: Godot compiles a
+    /// material's shader when it is first drawn, so the hitch happens here and not when a sector opens.</summary>
+    async System.Threading.Tasks.Task CompileShaders(List<Node3D> templates)
+    {
+        if (templates.Count == 0) return;
+        var vp = new SubViewport { Size = new Vector2I(128, 128), OwnWorld3D = true, RenderTargetUpdateMode = SubViewport.UpdateMode.Always,
+                                   Msaa3D = _vp.Msaa3D, TransparentBg = true };
+        AddChild(vp);
+        vp.AddChild(new Camera3D { Position = new Vector3(0, 0, 3), Near = 0.001f, Far = 100, Fov = 70 });
+        vp.AddChild(new DirectionalLight3D { RotationDegrees = new Vector3(-40, 30, 0) });
+        foreach (var t in templates)
+        {
+            var inst = (Node3D)t.Duplicate();
+            var box = Bounds(inst, Transform3D.Identity);
+            float size = Math.Max(box.Size.X, Math.Max(box.Size.Y, box.Size.Z));
+            if (size > 0) inst.Scale = Vector3.One / size;
+            vp.AddChild(inst);
+        }
+        for (int f = 0; f < 3; f++) await ToSignal(RenderingServer.Singleton, RenderingServer.SignalName.FramePostDraw);
+        vp.QueueFree();
+    }
+
+    /// <summary>The box around all meshes below a node (in the node's space).</summary>
+    static Aabb Bounds(Node n, Transform3D at)
+    {
+        Aabb? box = null;
+        foreach (var ch in n.GetChildren())
+        {
+            if (ch is not Node3D c) continue;
+            var t = at * c.Transform;
+            if (c is MeshInstance3D { Mesh: { } mesh }) box = box is { } b0 ? b0.Merge(t * mesh.GetAabb()) : t * mesh.GetAabb();
+            var inner = Bounds(c, t);
+            if (inner.Size != Vector3.Zero) box = box is { } b1 ? b1.Merge(inner) : inner;
+        }
+        return box ?? new Aabb();
     }
 
     void SunFrom(string name, (double X, double Y, double Z) place)
@@ -480,6 +625,9 @@ public partial class SectorView : Control
             sun.LightColor = new Color(light.SunColour.X, light.SunColour.Y, light.SunColour.Z);
         }
         _bgSun.LightEnergy = light.SunIntensity;
+        // planets light themselves (own shader): same sun
+        PlanetShaders.SetSun(toSun, new Vector3(light.SunColour.X, light.SunColour.Y, light.SunColour.Z) * light.SunIntensity,
+            new Vector3(light.AmbientColour.X, light.AmbientColour.Y, light.AmbientColour.Z));
     }
 
     // ---------------------------------------------------------------------------------------------- pieces
@@ -488,6 +636,33 @@ public partial class SectorView : Control
         Text = text, Billboard = BaseMaterial3D.BillboardModeEnum.Enabled, FixedSize = true, PixelSize = 0.0009f,
         FontSize = size, OutlineSize = 6, NoDepthTest = true, Modulate = col, HorizontalAlignment = align, Offset = offset,
     };
+
+    /// <summary>
+    /// Performance mode on / off: simple materials and no effect layers (X4ToGodot.Simple), no gas / nebula puffs
+    /// (DecorVisuals), no glow, no anti-aliasing. The model templates
+    /// hold the old materials: they are dropped and the open sector is built again.
+    /// </summary>
+    public void SetPerformance(bool on)
+    {
+        _bgEnv.GlowEnabled = _env.GlowEnabled = !on;
+        _bgVp.Msaa3D = _vp.Msaa3D = on ? Viewport.Msaa.Disabled : Viewport.Msaa.Msaa2X;
+        if (_app.Conv == null || _app.Conv.Simple == on) return;
+        _app.Conv.Simple = on;
+        foreach (var t in _models.Values.Concat(_backdrops.Values)) t?.Free();
+        _models.Clear(); _backdrops.Clear();
+        _visuals.Free();
+        _shownBackdrop = null;
+        if (Visible && _app.OpenSectorId != null) ShowSector();
+    }
+
+    /// <summary>Forgets every built model (game data read again: another mod scope).</summary>
+    public void DropModels()
+    {
+        foreach (var t in _models.Values.Concat(_backdrops.Values)) t?.Free();
+        _models.Clear(); _backdrops.Clear();
+        _visuals.Free();
+        _shownBackdrop = null;
+    }
 
     /// <summary>The model templates are not in the scene tree: free them when the view goes.</summary>
     public override void _ExitTree()
@@ -511,7 +686,57 @@ public partial class SectorView : Control
     }
 
     /// <summary>
-    /// A station marker until real station models are built: a hub with four arms (about 6 km across, the size of a mid
+    /// A station as in the game: the modules of its construction plan (FactionCatalog.ModulesOf), each module's model
+    /// built once and shared. Turned by the station's facing. Without a plan (factories) or game files: the marker.
+    /// </summary>
+    Node3D Station(string? stationId, string? tag, string faction, Color colour, double yaw)
+    {
+        if (StationTemplate(stationId, tag, faction) is { } tpl)
+        {
+            var holder = new Node3D { Basis = new Basis(Vector3.Up, -Mathf.DegToRad((float)yaw)) };
+            holder.AddChild(tpl.Duplicate());
+            return holder;
+        }
+        return StationBody(colour, yaw);
+    }
+
+    /// <summary>The station's model (template, not in the tree), built from its plan's modules; null = none.</summary>
+    Node3D? StationTemplate(string? stationId, string? tag, string faction)
+    {
+        if (_app.Conv == null || _app.Factions?.ModulesOf(stationId, tag, faction) is not { } mods) return null;
+        string key = "station:" + (stationId ?? $"{tag}:{faction}");
+        if (_models.TryGetValue(key, out var cached)) return cached;
+        var root = new Node3D { Name = key.Replace(":", "_") };
+        foreach (var m in mods)
+        {
+            if (Model(m.Macro, StationLod) is not { } part) continue;
+            var inst = (Node3D)part.Duplicate();
+            // X4 -> Godot: z mirrored (as the models themselves)
+            inst.Transform = new Transform3D(DecorVisuals.Rotation(m.Yaw, m.Pitch, m.Roll), new Vector3((float)m.X, (float)m.Y, (float)-m.Z));
+            root.AddChild(inst);
+        }
+        if (root.GetChildCount() == 0) { root.Free(); root = null; }
+        _models[key] = root;
+        return root;
+    }
+
+    /// <summary>Detail level of station modules: LOD 0 gave 6.6 million vertices for three stations (2026-11-22); seen
+    /// from kilometres away a coarser level looks the same. X4ED_STATIONLOD=n overrides (look checks).</summary>
+    static readonly int StationLod = int.TryParse(System.Environment.GetEnvironmentVariable("X4ED_STATIONLOD"), out var l) ? l : 2;
+
+    /// <summary>A macro's model (template) at a detail level, built once; null when the game files have none.</summary>
+    Node3D? Model(string macro, int lod = 0)
+    {
+        string key = lod == 0 ? macro : $"{macro}@{lod}";
+        if (_models.TryGetValue(key, out var tpl)) return tpl;
+        if (_app.Conv == null) return null;
+        tpl = _app.Conv.BuildObject(macro, lod);
+        if (tpl.GetChildCount() == 0) { tpl.Free(); tpl = null; }
+        return _models[key] = tpl;
+    }
+
+    /// <summary>
+    /// A station marker when no station model can be built (factories, no game files): a hub with four arms (about 6 km across, the size of a mid
     /// station) in the faction's colour, turned by its facing (one arm points where the station faces).
     /// </summary>
     static Node3D StationBody(Color colour, double yaw)
@@ -529,16 +754,11 @@ public partial class SectorView : Control
         return holder;
     }
 
+    static string GateMacro(string type) => type == "accelerator" ? "props_gates_orb_accelerator_01_macro" : "props_gates_anc_gate_macro";
+
     Node3D GateModel(string type)
     {
-        string macro = type == "accelerator" ? "props_gates_orb_accelerator_01_macro" : "props_gates_anc_gate_macro";
-        if (!_models.TryGetValue(macro, out var tpl) && _app.Conv != null)
-        {
-            tpl = _app.Conv.BuildObject(macro);
-            if (tpl.GetChildCount() == 0) { tpl.Free(); tpl = null; }
-            _models[macro] = tpl;
-        }
-        if (tpl != null) return (Node3D)tpl.Duplicate();
+        if (Model(GateMacro(type)) is { } tpl) return (Node3D)tpl.Duplicate();
         // no game files (yet): a plain ring of the gate's size, standing upright
         var ring = new MeshInstance3D { Mesh = new TorusMesh { InnerRadius = 1700, OuterRadius = 2000, Rings = 48, RingSegments = 8 } };
         ring.RotationDegrees = new Vector3(90, 0, 0);

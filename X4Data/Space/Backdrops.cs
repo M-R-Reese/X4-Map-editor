@@ -31,15 +31,37 @@ public static class Backdrops
         {
             var file = g.ComponentFile(name);
             if (file == null || !Regex.IsMatch(file, @"/environments/clusters?/", RegexOptions.IgnoreCase) || !g.Vfs.Exists(file)) continue;
-            XElement? el;
-            try { el = g.ComponentElement(name); } catch { continue; }
-            if ((string?)el?.Attribute("class") != "celestialbody") continue;
+            if (ComponentClass(g, name, file) != "celestialbody") continue;
             var src = file.StartsWith("extensions/", StringComparison.OrdinalIgnoreCase) ? file.Split('/')[1] : "base";
             var m = re.Match(name);
             list.Add(new Entry(m.Success ? int.Parse(m.Groups[1].Value) : null, name, src, src == "base" || src.StartsWith("ego_", StringComparison.OrdinalIgnoreCase)));
         }
         return list.OrderBy(e => e.Source == "base" ? 0 : e.Egosoft ? 1 : 2).ThenBy(e => e.Source)
                    .ThenBy(e => e.Number ?? int.MaxValue).ThenBy(e => e.Component, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    static readonly Regex ComponentTag = new(@"<component\s[^>]*>", RegexOptions.Compiled);
+    static readonly Regex Attr = new(@"\b(name|class)\s*=\s*""([^""]*)""", RegexOptions.Compiled);
+
+    /// <summary>
+    /// The class of a component, read from the top of its file: cluster files hold thousands of stars and planets,
+    /// parsing all of that only for this one attribute took 4 s at start (2026-11-22). Whole file only as fallback.
+    /// </summary>
+    static string? ComponentClass(GameData g, string name, string file)
+    {
+        try
+        {
+            var bytes = g.Vfs.Read(file);
+            var head = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(bytes.Length, 16384));
+            foreach (Match tag in ComponentTag.Matches(head))
+            {
+                string? n = null, c = null;
+                foreach (Match a in Attr.Matches(tag.Value)) { if (a.Groups[1].Value == "name") n = a.Groups[2].Value; else c = a.Groups[2].Value; }
+                if (string.Equals(n, name, StringComparison.OrdinalIgnoreCase)) return c;
+            }
+            return (string?)g.ComponentElement(name)?.Attribute("class");
+        }
+        catch { return null; }
     }
 
     /// <summary>SunPosition: where the sun light sits in the backdrop (metres, X4 space); SunDirection: from the cluster centre.</summary>

@@ -275,6 +275,13 @@ public sealed class BaseGalaxy
             Link(g, (edit.SectorOfGate(bg.Link ?? -1)?.Name ?? "?") + " (new gate of your patch)");
             sec.Gates.Add(g);
         }
+        // pirate stations our patch adds to this sector (the only stations shown: vanilla ones are not read)
+        foreach (var bs in edit.BaseStations.Where(b => b.SectorMacro.Equals(s.Macro, StringComparison.OrdinalIgnoreCase)))
+        {
+            var st = new Station { Id = id++, Kind = bs.Kind, Faction = bs.Faction, Ref = bs.Ref, X = bs.X, Y = bs.Y, Z = bs.Z, Yaw = bs.Yaw };
+            view.ViewBaseStations[st.Id] = bs.Id;                              // the editor lets this one change
+            sec.Stations.Add(st);
+        }
         view.NextId = id;
         return view;
     }

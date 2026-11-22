@@ -21,6 +21,8 @@ public sealed class Xmf
     public Vector3[] Positions = Array.Empty<Vector3>();
     public Vector3[]? Normals;
     public Vector2[]? Uvs;
+    /// <summary>Second UV set (planets: the clouds); null when the mesh has none.</summary>
+    public Vector2[]? Uvs2;
     /// <summary>Vertex colour 0 as RGBA bytes (backdrop skies are painted this way), or null.</summary>
     public byte[]? Colors;
     public int[] Indices = Array.Empty<int>();
@@ -104,13 +106,14 @@ public sealed class Xmf
                 x.Normals = new Vector3[count];
                 for (int v = 0; v < count; v++) x.Normals[v] = type == 2 ? F3(d, v * stride + at) : Packed(d, v * stride + at, type);
             }
-            else if (usage == UsageTexcoord && usageIndex == 0)
+            else if (usage == UsageTexcoord && usageIndex <= 1)
             {
-                x.Uvs = new Vector2[count];
+                var uvs = new Vector2[count];
+                if (usageIndex == 0) x.Uvs = uvs; else x.Uvs2 = uvs;
                 for (int v = 0; v < count; v++)
                 {
                     int p = v * stride + at;
-                    x.Uvs[v] = type == 1 ? new Vector2(BitConverter.ToSingle(d, p), BitConverter.ToSingle(d, p + 4))
+                    uvs[v] = type == 1 ? new Vector2(BitConverter.ToSingle(d, p), BitConverter.ToSingle(d, p + 4))
                              : type == 15 ? new Vector2((float)BitConverter.ToHalf(d, p), (float)BitConverter.ToHalf(d, p + 2))
                              : Vector2.Zero;
                 }

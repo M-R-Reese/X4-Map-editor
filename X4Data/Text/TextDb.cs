@@ -52,9 +52,22 @@ public sealed class TextDb
             try { part = GameXml.Parse(vfs.Read(p)); }
             catch (Exception e) { g.Notes.Add($"{p}: not readable ({e.Message})"); continue; }
             if (part.Root == null) continue;
-            if (part.Root.Name.LocalName == "diff") { if (doc != null) GameXml.Apply(doc, part.Root, p, g.Notes); }
+            bool may = vfs.Changes(ext.FolderName);
+            if (part.Root.Name.LocalName == "diff") { if (doc != null && may) GameXml.Apply(doc, part.Root, p, g.Notes); }
             else if (doc == null) doc = part;
-            else doc.Root!.Add(part.Root.Elements());
+            else if (may) doc.Root!.Add(part.Root.Elements());
+            else
+            {
+                // outside the project's scope: only the texts nobody has yet (its own galaxy's names), no replacements
+                var have = new HashSet<(string, string)>(doc.Root!.Elements("page").SelectMany(pg => pg.Elements("t")
+                    .Select(t => ((string?)pg.Attribute("id") ?? "", (string?)t.Attribute("id") ?? ""))));
+                foreach (var pg in part.Root.Elements("page"))
+                {
+                    var pid = (string?)pg.Attribute("id") ?? "";
+                    var fresh = pg.Elements("t").Where(t => !have.Contains((pid, (string?)t.Attribute("id") ?? ""))).ToList();
+                    if (fresh.Count > 0) doc.Root.Add(new XElement("page", pg.Attributes(), fresh));
+                }
+            }
         }
         return doc;
     }
