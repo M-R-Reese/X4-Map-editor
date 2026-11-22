@@ -427,7 +427,7 @@ public partial class App : Control
         var r = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         void Add(string? src, string what) { if (IsEgosoft(src)) return; if (!r.TryGetValue(src!, out var l)) r[src!] = l = new(); if (!l.Contains(what)) l.Add(what); }
         foreach (var b in Backdrops) Add(b.Source, "backdrops");
-        foreach (var m in Music.Library?.All ?? new()) foreach (var t in m.Tracks) Add(SourceOfPath(t.File), "music");
+        foreach (var m in Music.Library?.All ?? new()) Add(m.Source, "music");
         foreach (var i in Decor?.Items ?? new()) Add(i.Source, i.Kind == "region" ? "fields" : i.Kind == "station" ? "stations" : "objects");
         foreach (var f in Factions?.All.ToList() ?? new()) if (f.Active && !f.Hidden) Add(f.Source, "factions");
         return r;
@@ -450,8 +450,7 @@ public partial class App : Control
         foreach (var c in p.Clusters)
         {
             if (Backdrops.FirstOrDefault(b => b.Component.Equals(c.BackdropComponent(), StringComparison.OrdinalIgnoreCase))?.Source is { } bs) used.Add(bs);
-            if (c.Music != "" && Music.Library?.Get(c.Music) is { } m && m.Tracks.Count > 0 && m.Tracks.All(t => !IsEgosoft(SourceOfPath(t.File))))
-                used.Add(SourceOfPath(m.Tracks[0].File));
+            if (c.Music != "" && Music.Library?.Get(c.Music) is { } m) used.Add(m.Source);
         }
         return used.Where(u => !Allowed(u)).OrderBy(u => u).ToList();
     }

@@ -292,3 +292,56 @@ else if (mode == "modmusic")
         foreach (var s in X4Data.Xml.GameXml.Parse(g.Vfs.Read(lib)).Descendants("sound").Where(s => ((string?)s.Attribute("id") ?? "").StartsWith("music_")).Take(12))
             Console.WriteLine($"  {(string?)s.Attribute("id")}: found {(ml.Get((string?)s.Attribute("id") ?? "") != null)}, first track {s.Descendants("select").Select(x => (string?)x.Attribute("start")).FirstOrDefault()}");
 }
+else if (mode == "music")
+{
+    var ml = new X4Data.Audio.MusicLibrary(g);
+    Console.WriteLine($"{ml.All.Count} music entries; ids: " + string.Join(" ", ml.All.Select(m => m.Id + "(" + m.Tracks.Count + (m.Tracks.Any(t => t.File.StartsWith("extensions/")) ? ",mod" : "") + ")")));
+    var doc = X4Data.Xml.GameXml.Load(g.Vfs, "libraries/sound_library.xml");
+    var ids = doc!.Root!.Elements("sound").Select(s => (string?)s.Attribute("id") ?? "").Where(i => i.StartsWith("music_")).ToList();
+    Console.WriteLine($"music sound entries in the merged library: {ids.Count}, distinct {ids.Distinct().Count()}");
+    var missing = doc.Root.Elements("sound").Where(s => ((string?)s.Attribute("id") ?? "").StartsWith("music_")).Where(s => !s.Descendants("select").Any(x => g.Vfs.Exists(X4Data.Vfs.VirtualFileSystem.Norm((string?)x.Attribute("start") ?? "") + ".ogg") || g.Vfs.Exists(X4Data.Vfs.VirtualFileSystem.Norm((string?)x.Attribute("start") ?? "")))).Take(8);
+    foreach (var s in missing) Console.WriteLine($"  no track found: {(string?)s.Attribute("id")} first start {s.Descendants("select").Select(x => (string?)x.Attribute("start")).FirstOrDefault()}");
+}
+else if (mode == "backdropshaders")
+{
+    // every shader / blend mode the base game and DLC backdrops use, with how many parts
+    var count = new Dictionary<string, (int n, string example)>();
+    foreach (var b in X4Data.Space.Backdrops.List(g).Where(b => b.Egosoft))
+        foreach (var p in X4Data.Model.Assembly.Build(g, b.Component, 0, new List<string>()))
+            foreach (var mn in p.MaterialNames.Distinct())
+            {
+                var m = g.Materials.Get(mn); var k = m == null ? "(missing) " + mn : $"{m.Shader} {m.BlendMode}";
+                count[k] = count.TryGetValue(k, out var c) ? (c.n + 1, c.example) : (1, $"{b.Component}/{p.PartName}/{mn}");
+            }
+    foreach (var (k, v) in count.OrderByDescending(x => x.Value.n)) Console.WriteLine($"{v.n,5} {k,-50} {v.example}");
+}
+else if (mode == "texinfo")
+{
+    foreach (var t in args.Skip(1))
+    {
+        try { var d = X4Data.Textures.Dds.Load(g.Vfs, t, false); Console.WriteLine(d == null ? $"{t}: NOT FOUND" : $"{t}: {d.Format} {d.Width}x{d.Height} mips {d.Mipmaps} bytes {d.Data.Length}"); }
+        catch (Exception e) { Console.WriteLine($"{t}: ERROR {e.Message}"); }
+    }
+}
+else if (mode == "vcolors")
+{
+    // vertex colour range of each part of a component (X4 keeps them in the mesh; the fallback multiplies them in)
+    foreach (var p in X4Data.Model.Assembly.Build(g, args[1], 0, new List<string>()))
+    {
+        var c = p.Mesh.Colors; if (c == null) { Console.WriteLine($"{p.PartName}: no vertex colours"); continue; }
+        double r = 0, gg = 0, b = 0, a = 0; int n = c.Length / 4; byte mx = 0;
+        for (int i = 0; i < n; i++) { r += c[i * 4]; gg += c[i * 4 + 1]; b += c[i * 4 + 2]; a += c[i * 4 + 3]; mx = Math.Max(mx, Math.Max(c[i * 4], Math.Max(c[i * 4 + 1], c[i * 4 + 2]))); }
+        Console.WriteLine($"{p.PartName}: mean rgba {r / n:0} {gg / n:0} {b / n:0} {a / n:0}, max {mx}, uvs {(p.Mesh.Uvs != null)}");
+    }
+}
+else if (mode == "texalpha")
+{
+    // mean / min / max of the alpha channel of an Rgba8 texture (top level), and of red
+    foreach (var t in args.Skip(1))
+    {
+        var d = X4Data.Textures.Dds.Load(g.Vfs, t, false); if (d == null || d.Format != "Rgba8") { Console.WriteLine($"{t}: {d?.Format}"); continue; }
+        long n = (long)d.Width * d.Height; double sa = 0, sr = 0; int mn = 255, mx = 0;
+        for (long i = 0; i < n; i += 7) { int a = d.Data[i * 4 + 3]; sa += a; sr += d.Data[i * 4]; mn = Math.Min(mn, a); mx = Math.Max(mx, a); }
+        Console.WriteLine($"{t}: alpha mean {sa / (n / 7):0} min {mn} max {mx}; red mean {sr / (n / 7):0}");
+    }
+}

@@ -107,6 +107,8 @@ public sealed class X4ToGodot
         var lit = name == "" ? null : _g.Materials.Get(name);
         if (lit != null && X4Shaders.Handles(lit) && lit.BlendMode is not ("ADDITIVE" or "SCREEN"))
             return _materials[name] = X4Shaders.Build(lit, GetTexture);
+        // sky, stars, nebulae, suns, atmospheres, rings
+        if (lit != null && BackdropShaders.Build(lit, GetTexture) is { } bd) return _materials[name] = bd;
         var m = new StandardMaterial3D { AlbedoColor = new Color(0.55f, 0.57f, 0.6f), Roughness = 0.6f };
         var x = name == "" ? null : _g.Materials.Get(name);
         if (x == null) { if (name != "") Notes.Add($"material '{name}' not in the library"); }

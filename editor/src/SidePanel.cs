@@ -176,7 +176,7 @@ public partial class SidePanel : VBoxContainer
 
         var lib = _app.Music.Library;
         var music = lib != null
-            ? new[] { ("", "(none)") }.Concat(lib.All.Where(m => m.Id == c.Music || m.Tracks.Any(t => _app.Allowed(App.SourceOfPath(t.File)))).Select(m => (m.Id, m.Description))).ToArray()
+            ? new[] { ("", "(none)") }.Concat(lib.All.Where(m => m.Id == c.Music || _app.Allowed(m.Source)).Select(m => (m.Id, m.Description))).ToArray()
             : GalaxyFacts.Music.Select(m => (m, m == "" ? "(none)" : m)).ToArray();
         Choice("Music", music, c.Music, v => c.Music = v, arrows: true, tip: "The music that plays in this cluster.", dice: v => v != "");
         var row = new HBoxContainer(); _box.AddChild(row);

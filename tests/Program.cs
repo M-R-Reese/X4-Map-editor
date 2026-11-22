@@ -112,10 +112,19 @@ if (swMod != null && File.Exists(Path.Combine(swMod, "content.xml")))
         Check("its own fields offered in the palette (its globalregion definitions)", dc2.Items.Count(i => i.Source == sw2!.FolderName && i.Kind == "region") > 50,
             $"{dc2.Items.Count(i => i.Source == sw2!.FolderName && i.Kind == "region")} fields");
         Check("its backdrops listed", X4Data.Space.Backdrops.List(g2).Count(b => b.Source == sw2!.FolderName) > 50, "");
-        Check("its music found", new X4Data.Audio.MusicLibrary(g2).All.Any(m => m.Tracks.Any(t => t.File.Contains(sw2!.FolderName, StringComparison.OrdinalIgnoreCase))), "");
+        var ml2 = new X4Data.Audio.MusicLibrary(g2);
+        Check("its music found", ml2.All.Any(m => m.Tracks.Any(t => t.File.Contains(sw2!.FolderName, StringComparison.OrdinalIgnoreCase))), "");
+        var replaced = ml2.All.Where(m => m.Source == "base" && m.Tracks.Count > 0 && m.Tracks.All(t => t.File.Contains(sw2!.FolderName, StringComparison.OrdinalIgnoreCase))).ToList();
+        Check("Egosoft music whose tracks the mod replaced stays Egosoft's (offered in vanilla projects)", ml2.Get("music_cluster_complete")?.Source == "base",
+            $"{replaced.Count} Egosoft ids with only the mod's tracks: " + string.Join(", ", replaced.Take(5).Select(m => m.Id)));
     }
 }
 DecorTests.Run(game, Check);
+{
+    // music: entries with several tracks (<sample><select start/>) and with one (<sample start/>) are both read
+    var ml = new X4Data.Audio.MusicLibrary(game);
+    Check("music: nearly all music entries of the game have tracks (single <sample start> too)", ml.All.Count > 150 && ml.Get("music_highway_v1_t1") != null, $"{ml.All.Count} entries");
+}
 
 Console.WriteLine(failed == 0 ? "\nALL PASSED" : $"\n{failed} FAILED");
 return failed == 0 ? 0 : 1;

@@ -456,7 +456,14 @@ public partial class SectorView : Control
             if (tpl.GetChildCount() == 0) { tpl.Free(); tpl = null; }
             _backdrops[name] = tpl;
         }
-        if (tpl != null) _bgContent.AddChild(tpl.Duplicate());
+        if (tpl != null)
+        {
+            var shown = tpl.Duplicate();
+            // look checks: X4ED_BDPART=<part name> shows only that part of the backdrop
+            if (System.Environment.GetEnvironmentVariable("X4ED_BDPART") is { Length: > 0 } only)
+                foreach (var ch in shown.GetChildren()) if (ch is Node3D n3 && !n3.Name.ToString().Equals(only, StringComparison.OrdinalIgnoreCase)) n3.Visible = false;
+            _bgContent.AddChild(shown);
+        }
     }
 
     void SunFrom(string name, (double X, double Y, double Z) place)
