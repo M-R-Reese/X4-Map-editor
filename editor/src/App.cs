@@ -22,7 +22,7 @@ public partial class App : Control
 {
     /// <summary>Visible name and version (window title, dialogs). The Godot project name stays "X4 Galaxy Editor 3D"
     /// on purpose: it names the user data folder (settings, autosave).</summary>
-    public const string AppName = "X4 Map Editor", Version = "0.1 beta";
+    public const string AppName = "X4 Map Editor", Version = "0.2 beta";
     public Project P = new();
     public Selection? Sel;
     public int? OpenSectorId;                       // null = galaxy view
