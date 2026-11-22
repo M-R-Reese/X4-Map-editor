@@ -6,15 +6,18 @@ Author: M.R. Reese. Work in progress. Licence: MIT (see `LICENSE`).
 
 ## Try the beta (no installation)
 
-**[Pre-release 0.2.5 beta](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.5-beta)** · [direct download (zip, 69 MB)](https://github.com/M-R-Reese/X4-Map-editor/releases/download/v0.2.5-beta/X4MapEditor-0.2.5-beta-windows.zip)
+**[Pre-release 0.2.6 beta](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.6-beta)** · [direct download (zip, 69 MB)](https://github.com/M-R-Reese/X4-Map-editor/releases/download/v0.2.6-beta/X4MapEditor-0.2.6-beta-windows.zip)
 
-1. Download `X4MapEditor-0.2.5-beta-windows.zip` from the [pre-release page](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.5-beta).
+1. Download `X4MapEditor-0.2.6-beta-windows.zip` from the [pre-release page](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.6-beta).
 2. Unpack it anywhere and start `X4MapEditor.exe`. Nothing else is needed: .NET comes with it.
 3. On the first start, check the folders the editor guessed (your X4 game folder, your profile folder) and click **Start**.
 
 You need X4: Foundations installed (Windows, Steam). New in 0.2: stations in 3D, game starts (fixed, personalised,
 creative), sector AI, and the game's faction AI and missions in an own galaxy. **Export as a mod is new and not yet fully
 tested in the game**: try it on a fresh save and report what you see. Feedback is welcome in the Issues.
+0.2.6: backdrops drawn much closer to the game (nebulae, starfields, rings); all of the game's music; full
+conversions' sector names, fields, backdrops and music; per project a choice of which mods' content it may use
+(Project settings → Mods; Egosoft content always).
 0.2.5: galaxies of mods and full conversions that write empty or broken numbers in their map files are read now
 (before: "could not be read: The input string '' was not in a correct format").
 
