@@ -140,12 +140,16 @@ public static class ModExport
                 done.Add(g2.Id);
                 cons.Append($"      <connection name=\"{p.Prefix}_link_g{Pad(g.Id)}_g{Pad(g2.Id)}\" ref=\"destination\" path=\"../{GPath(c, s, g)}\">\n        <macro connection=\"destination\" path=\"../../../../../{GPath(c2, s2, g2)}\" />\n      </connection>\n");
             }
+        // PATCH: changes to the galaxy's own clusters and sectors (moved clusters, sector values, resources)
+        var baseChanges = patch ? BaseChanges.Diffs(p, o.Base!, o.Notes) : (Galaxy: "", MapDefaults: "", Deps: new SortedSet<string>());
+        foreach (var d in baseChanges.Deps) extraDeps.Add(d);
         if (patch)
         {
             // added to the patched galaxy's macro, in a file at the same path as the one that defines it
             // (base game: maps/<galaxy>/galaxy.xml; a mod's galaxy: extensions/<its folder>/maps/<galaxy>/galaxy.xml)
-            files[o.Base!.Galaxy.File] = Head + $"<diff>\n  <add sel=\"/macros/macro[@name='{p.BaseGalaxy}']/connections\">\n{cons}  </add>\n</diff>\n";
-            if (o.Base.Galaxy.Source != "base") extraDeps.Add(o.Base.Galaxy.Source);
+            var gd = (cons.Length > 0 ? $"  <add sel=\"/macros/macro[@name='{p.BaseGalaxy}']/connections\">\n{cons}  </add>\n" : "") + baseChanges.Galaxy;
+            if (gd.Length > 0) files[o.Base!.Galaxy.File] = Head + $"<diff>\n{gd}</diff>\n";
+            if (o.Base!.Galaxy.Source != "base") extraDeps.Add(o.Base.Galaxy.Source);
         }
         else
             files[$"maps/{galaxy}/galaxy.xml"] = Head + $"<macros>\n  <macro name=\"{galaxy}_macro\" class=\"galaxy\">\n    <component ref=\"standardgalaxy\" />\n    <connections>\n{cons}    </connections>\n  </macro>\n</macros>\n";
@@ -241,7 +245,10 @@ public static class ModExport
                 x.Append($"        <area sunlight=\"{Num(s.Sunlight)}\" economy=\"{Num(s.Economy)}\" security=\"{Num(s.Security)}\"{tags}{logic} />\n      </properties>\n    </dataset>\n");
             }
         }
-        files["libraries/mapdefaults.xml"] = x.Append("  </add>\n</diff>\n").ToString();
+        x.Append("  </add>\n");
+        if (p.Clusters.Count == 0) x = new StringBuilder(Head).Append("<diff>\n");          // nothing of our own: no empty <add>
+        x.Append(baseChanges.MapDefaults);
+        if (p.Clusters.Count > 0 || baseChanges.MapDefaults.Length > 0) files["libraries/mapdefaults.xml"] = x.Append("</diff>\n").ToString();
 
         // ---- libraries/god.xml: stations (carried along for the population editor) ----
         var stn = new StringBuilder(); var prod = new StringBuilder();

@@ -35,8 +35,8 @@ public static class GameXml
     }
 
     /// <summary>
-    /// Parses game / mod XML. Tolerant like the game: a declaration with version="1.1" (seen in the Star Wars
-    /// Interworlds content.xml) is read as 1.0, which .NET would otherwise refuse.
+    /// Parses game / mod XML. Tolerant like the game: a declaration with version="1.1" (seen in a mod's
+    /// content.xml) is read as 1.0, which .NET would otherwise refuse.
     /// </summary>
     public static XDocument Parse(byte[] bytes)
     {

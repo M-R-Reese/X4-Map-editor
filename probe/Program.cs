@@ -220,3 +220,16 @@ else if (mode == "showlines")
     int from = int.Parse(args[2]), n = int.Parse(args[3]);
     for (int i = from - 1; i < Math.Min(lines.Length, from - 1 + n); i++) Console.WriteLine($"{i + 1}: {lines[i].TrimEnd()}");
 }
+else if (mode == "galaxies")
+{
+    // every galaxy the editor would offer for a patch, and which files the extra mods bring under maps/
+    foreach (var i in X4Data.Galaxy.BaseGalaxy.Installed(g)) Console.WriteLine($"galaxy {i.Macro} folder {i.Folder} source {i.Source}");
+    foreach (var f in g.Vfs.Files.Where(f => f.Path.Contains("maps/") && f.Path.EndsWith("galaxy.xml")).Take(40)) Console.WriteLine($"file {f.Path} disk={f.DiskPath ?? f.Entry?.Catalog.CatPath}");
+}
+else if (mode == "readgalaxy")
+{
+    // reads one installed galaxy as the editor does (patch base); prints the error with its stack
+    var info = X4Data.Galaxy.BaseGalaxy.Installed(g).First(i => i.Macro.Equals(args[1], StringComparison.OrdinalIgnoreCase));
+    try { var bg = X4Data.Galaxy.BaseGalaxy.Read(g, info, new X4Data.Text.TextDb(g, 44)); Console.WriteLine($"read ok: {bg.Clusters.Count} clusters, {bg.Clusters.Sum(c => c.Sectors.Count)} sectors, {bg.Clusters.Sum(c => c.Sectors.Sum(s => s.Gates.Count))} gates"); }
+    catch (Exception e) { Console.WriteLine(e); }
+}

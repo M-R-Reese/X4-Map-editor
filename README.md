@@ -6,15 +6,37 @@ Author: M.R. Reese. Work in progress. Licence: MIT (see `LICENSE`).
 
 ## Try the beta (no installation)
 
-**[Pre-release 0.2 beta](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2-beta)** · [direct download (zip, 69 MB)](https://github.com/M-R-Reese/X4-Map-editor/releases/download/v0.2-beta/X4MapEditor-0.2-beta-windows.zip)
+**[Pre-release 0.2.5 beta](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.5-beta)** · [direct download (zip, 69 MB)](https://github.com/M-R-Reese/X4-Map-editor/releases/download/v0.2.5-beta/X4MapEditor-0.2.5-beta-windows.zip)
 
-1. Download `X4MapEditor-0.2-beta-windows.zip` from the [pre-release page](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2-beta).
+1. Download `X4MapEditor-0.2.5-beta-windows.zip` from the [pre-release page](https://github.com/M-R-Reese/X4-Map-editor/releases/tag/v0.2.5-beta).
 2. Unpack it anywhere and start `X4MapEditor.exe`. Nothing else is needed: .NET comes with it.
 3. On the first start, check the folders the editor guessed (your X4 game folder, your profile folder) and click **Start**.
 
 You need X4: Foundations installed (Windows, Steam). New in 0.2: stations in 3D, game starts (fixed, personalised,
 creative), sector AI, and the game's faction AI and missions in an own galaxy. **Export as a mod is new and not yet fully
 tested in the game**: try it on a fresh save and report what you see. Feedback is welcome in the Issues.
+0.2.5: galaxies of mods and full conversions that write empty or broken numbers in their map files are read now
+(before: "could not be read: The input string '' was not in a correct format").
+
+## Open a mod or full conversion (packed or unpacked)
+
+The editor reads mods the way the game does, packed (`.cat` / `.dat` files) or unpacked (loose `.xml` files). You never
+need to unpack a mod to look at it or to build a patch for it.
+
+- **Installed and switched on in the game** (in the game's `extensions` folder): nothing to do, the editor reads it at start.
+- **Anywhere else** (downloaded, unpacked, a work folder):
+  1. **Menu** → **Mods from other folders ▸** → **Open a mod from another folder**.
+  2. Choose the mod's folder: the one with `content.xml` in it (for a download, the folder inside the zip, not the zip).
+     A folder that holds several mods works too.
+  3. The editor reads the game files again with the mod, as if it were switched on. The **New patch** page opens: its
+     galaxy is in the list (for a full conversion, its own galaxy; for a mod that adds sectors, the X4 galaxy with them).
+  4. Choose the galaxy. It is shown dimmed on the map; double-click a sector to look at it in 3D.
+- The mod's backdrops, objects and factions appear in the lists as long as its folder is listed. To get the plain
+  game back: Menu → Mods from other folders, or **Folders...** → "Other mod folders", and remove the folder.
+- A patch for a mod (new sectors, gates into its galaxy) needs that mod: the export writes it as a dependency and copies
+  none of its files.
+- Coming next: changing the sectors of an existing galaxy itself, as a patch (anybody, for any mod) or written straight
+  into the mod's own unpacked files (for its author).
 
 ## What it does
 

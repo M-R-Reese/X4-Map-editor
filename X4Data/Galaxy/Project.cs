@@ -25,6 +25,17 @@ public sealed class Project
     public string? BaseSource { get; set; }
     /// <summary>PATCH: gates on the side of the patched galaxy that our gates lead to (new ones or reused vanilla ones).</summary>
     public List<BaseGate> BaseGates { get; set; } = new();
+    /// <summary>
+    /// Changes to the installed galaxy's OWN sectors and clusters (by macro name), docs/plan_galaxy_editor_modowner.md.
+    /// One list for both ways out: the patch export writes them as diffs (anybody, for any mod), "Write into the mod"
+    /// writes them into the mod's own unpacked files (its owner). Only what differs from the game files is kept.
+    /// </summary>
+    public List<BaseSectorChange> BaseSectors { get; set; } = new();
+    public List<BaseClusterChange> BaseClusters { get; set; } = new();
+    public BaseSectorChange? BaseSectorChangeOf(string macro) => BaseSectors.FirstOrDefault(c => c.Macro.Equals(macro, StringComparison.OrdinalIgnoreCase));
+    public BaseClusterChange? BaseClusterChangeOf(string macro) => BaseClusters.FirstOrDefault(c => c.Macro.Equals(macro, StringComparison.OrdinalIgnoreCase));
+    /// <summary>Anything changed in the installed galaxy itself?</summary>
+    public bool HasBaseChanges => BaseSectors.Count > 0 || BaseClusters.Count > 0;
     public string Author { get; set; } = "M.R. Reese";
     public bool ReplaceVanillaStations { get; set; }
     public int NextId { get; set; } = 1;
@@ -194,6 +205,28 @@ public sealed class Decoration
     public double Roll { get; set; }
     /// <summary>Anomalies (wormholes) only: id of the partner anomaly, or null. Linked both ways like gates.</summary>
     public int? Link { get; set; }
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>A changed sector of the installed galaxy: null = as in the game files.</summary>
+public sealed class BaseSectorChange
+{
+    public string Macro { get; set; } = "";
+    public double? Sunlight { get; set; }
+    public double? Economy { get; set; }
+    public double? Security { get; set; }
+    /// <summary>The whole new list of resource areas (null = unchanged; empty = none).</summary>
+    public List<ResourceArea>? Res { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore] public bool Empty => Sunlight == null && Economy == null && Security == null && Res == null;
+    [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
+}
+
+/// <summary>A moved cluster of the installed galaxy: its new hex.</summary>
+public sealed class BaseClusterChange
+{
+    public string Macro { get; set; } = "";
+    public int Q { get; set; }
+    public int R { get; set; }
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
 }
 

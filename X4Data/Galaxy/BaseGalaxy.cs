@@ -87,6 +87,14 @@ public sealed class BaseGalaxy
         return doc?.Root?.Elements("macro").FirstOrDefault(m => string.Equals((string?)m.Attribute("name"), name, StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// A number attribute as the game reads it: missing, empty ("") or not a number = null (the caller's default).
+    /// Some mods write such values (an empty coordinate); a plain cast would throw and the whole galaxy be lost.
+    /// </summary>
+    static double? Num(XAttribute? a) =>
+        a != null && double.TryParse(a.Value.Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) && double.IsFinite(v) ? v : null;
+    static int? Int(XAttribute? a) => Num(a) is double v ? (int)Math.Round(v) : null;
+
     public static BaseGalaxy Read(GameData g, Info info, TextDb texts)
     {
         var b = new BaseGalaxy(info) { _game = g };
@@ -123,7 +131,7 @@ public sealed class BaseGalaxy
             var macro = (string?)con.Element("macro")?.Attribute("ref");
             if (macro == null) continue;
             var pos = con.Element("offset")?.Element("position");
-            double x = (double?)pos?.Attribute("x") ?? 0, z = (double?)pos?.Attribute("z") ?? 0;
+            double x = Num(pos?.Attribute("x")) ?? 0, z = Num(pos?.Attribute("z")) ?? 0;
             var c = new ClusterInfo
             {
                 Macro = macro, Connection = (string?)con.Attribute("name") ?? "", X = x, Z = z, Source = SourceOf(macro),
@@ -136,7 +144,7 @@ public sealed class BaseGalaxy
                 if (sm == null) continue;
                 var sp = sc.Element("offset")?.Element("position");
                 var sector = new SectorInfo(sm, names.TryGetValue(sm, out var sn) ? sn : sm,
-                    (double?)sp?.Attribute("x") ?? 0, (double?)sp?.Attribute("y") ?? 0, (double?)sp?.Attribute("z") ?? 0, SourceOf(sm))
+                    Num(sp?.Attribute("x")) ?? 0, Num(sp?.Attribute("y")) ?? 0, Num(sp?.Attribute("z")) ?? 0, SourceOf(sm))
                 { Connection = (string?)sc.Attribute("name") ?? "" };
                 // gates: the sector's zones (offset in the sector) and their gate connections (offset in the zone)
                 foreach (var zc in MacroMerged(sm)?.Element("connections")?.Elements("connection").Where(z => (string?)z.Attribute("ref") == "zones") ?? Enumerable.Empty<XElement>())
@@ -144,16 +152,16 @@ public sealed class BaseGalaxy
                     var zm = (string?)zc.Element("macro")?.Attribute("ref");
                     if (zm == null) continue;
                     var zp = zc.Element("offset")?.Element("position");
-                    double zx = (double?)zp?.Attribute("x") ?? 0, zy = (double?)zp?.Attribute("y") ?? 0, zz = (double?)zp?.Attribute("z") ?? 0;
+                    double zx = Num(zp?.Attribute("x")) ?? 0, zy = Num(zp?.Attribute("y")) ?? 0, zz = Num(zp?.Attribute("z")) ?? 0;
                     foreach (var gc in MacroMerged(zm)?.Element("connections")?.Elements("connection").Where(g => (string?)g.Attribute("ref") == "gates") ?? Enumerable.Empty<XElement>())
                     {
                         var gp = gc.Element("offset")?.Element("position");
                         var gq = gc.Element("offset")?.Element("quaternion");
-                        double qy = (double?)gq?.Attribute("qy") ?? 0, qw = (double?)gq?.Attribute("qw") ?? 1;
+                        double qy = Num(gq?.Attribute("qy")) ?? 0, qw = Num(gq?.Attribute("qw")) ?? 1;
                         var path = $"{c.Connection}/{sector.Connection}/{(string?)zc.Attribute("name")}/{(string?)gc.Attribute("name")}";
                         sector.Gates.Add(new GateInfo(path, zm, (string?)zc.Attribute("name") ?? "", (string?)gc.Attribute("name") ?? "",
                             (string?)gc.Element("macro")?.Attribute("ref") ?? "",
-                            zx + ((double?)gp?.Attribute("x") ?? 0), zy + ((double?)gp?.Attribute("y") ?? 0), zz + ((double?)gp?.Attribute("z") ?? 0),
+                            zx + (Num(gp?.Attribute("x")) ?? 0), zy + (Num(gp?.Attribute("y")) ?? 0), zz + (Num(gp?.Attribute("z")) ?? 0),
                             Math.Round(2 * Math.Atan2(qy, qw) * 180 / Math.PI, 1),
                             (string?)(gc.Element("macro")?.Element("properties") ?? gc.Element("properties"))?.Element("state")?.Attribute("active") != "false",   // under the gate's <macro>
                             links.TryGetValue(path, out var other) ? other : null, SourceOf(zm)));
@@ -165,6 +173,31 @@ public sealed class BaseGalaxy
         }
         return b;
     }
+
+    /// <summary>Sunlight, economy, security and resource areas of a sector as the game files have them (all mods applied).</summary>
+    public (double Sunlight, double Economy, double Security, List<ResourceArea> Res) SectorValues(string macro)
+    {
+        var res = new List<ResourceArea>();
+        if (!_datasets.TryGetValue(macro, out var ds)) return (1, 0.5, 0.5, res);
+        var area = ds.Element("properties")?.Element("area");
+        foreach (var ra in ds.Element("properties")?.Element("resourceareas")?.Elements("resourcearea") ?? Enumerable.Empty<XElement>())
+        {
+            // ref = sphere_<size>_<ware>_<yield>_<speed>
+            var parts = ((string?)ra.Attribute("ref") ?? "").Split('_');
+            if (parts.Length < 5 || parts[0] != "sphere") continue;
+            res.Add(new ResourceArea { Amount = Int(ra.Attribute("amount")) ?? 1, Size = parts[1], Ware = string.Join("_", parts[2..^2]), Yield = parts[^2], Speed = parts[^1] });
+        }
+        return (Num(area?.Attribute("sunlight")) ?? 1, Num(area?.Attribute("economy")) ?? 0.5, Num(area?.Attribute("security")) ?? 0.5, res);
+    }
+
+    public static ResourceArea CopyRes(ResourceArea r) => new() { Amount = r.Amount, Size = r.Size, Ware = r.Ware, Yield = r.Yield, Speed = r.Speed };
+
+    /// <summary>The mapdefaults dataset of a macro (all mods applied), for the writers: its own spelling of the name, what it has.</summary>
+    public XElement? Dataset(string macro) => _datasets.TryGetValue(macro, out var ds) ? ds : null;
+
+    /// <summary>The galaxy's connection of a cluster (all mods applied), for the writers: has it an offset / position?</summary>
+    public XElement? ClusterConnection(ClusterInfo c) =>
+        MacroMerged(Galaxy.Macro)?.Element("connections")?.Elements("connection").FirstOrDefault(x => (string?)x.Attribute("name") == c.Connection);
 
     /// <summary>
     /// READ-ONLY view of a sector of this galaxy, as a small project the sector view can show: one cluster with the
@@ -186,17 +219,13 @@ public sealed class BaseGalaxy
         cl.Sectors.Add(sec);
         view.Clusters.Add(cl);
 
-        if (_datasets.TryGetValue(s.Macro, out var ds))
+        // the sector's values as in the game files, then what the project changed
+        var v = SectorValues(s.Macro);
+        sec.Sunlight = v.Sunlight; sec.Economy = v.Economy; sec.Security = v.Security; sec.Res = v.Res;
+        if (edit.BaseSectorChangeOf(s.Macro) is { } ch)
         {
-            var area = ds.Element("properties")?.Element("area");
-            sec.Sunlight = (double?)area?.Attribute("sunlight") ?? 1; sec.Economy = (double?)area?.Attribute("economy") ?? 0.5; sec.Security = (double?)area?.Attribute("security") ?? 0.5;
-            foreach (var ra in ds.Element("properties")?.Element("resourceareas")?.Elements("resourcearea") ?? Enumerable.Empty<XElement>())
-            {
-                // ref = sphere_<size>_<ware>_<yield>_<speed>
-                var parts = ((string?)ra.Attribute("ref") ?? "").Split('_');
-                if (parts.Length < 5 || parts[0] != "sphere") continue;
-                sec.Res.Add(new ResourceArea { Amount = (int?)ra.Attribute("amount") ?? 1, Size = parts[1], Ware = string.Join("_", parts[2..^2]), Yield = parts[^2], Speed = parts[^1] });
-            }
+            sec.Sunlight = ch.Sunlight ?? sec.Sunlight; sec.Economy = ch.Economy ?? sec.Economy; sec.Security = ch.Security ?? sec.Security;
+            if (ch.Res != null) sec.Res = ch.Res.Select(CopyRes).ToList();
         }
 
         // fields: region connections of the cluster, given to the sector whose place in the cluster is nearest
@@ -206,14 +235,14 @@ public sealed class BaseGalaxy
             if (region == null || region.StartsWith("audioregion", StringComparison.OrdinalIgnoreCase)) continue;   // sound only, nothing to see
             var off = rc.Element("offset");
             var pos = off?.Element("position");
-            double x = (double?)pos?.Attribute("x") ?? 0, y = (double?)pos?.Attribute("y") ?? 0, z = (double?)pos?.Attribute("z") ?? 0;
+            double x = Num(pos?.Attribute("x")) ?? 0, y = Num(pos?.Attribute("y")) ?? 0, z = Num(pos?.Attribute("z")) ?? 0;
             var nearest = c.Sectors.OrderBy(o => (o.X - x) * (o.X - x) + (o.Z - z) * (o.Z - z)).First();
             if (nearest.Macro != s.Macro) continue;
             var d = new Decoration { Id = id++, Kind = "region", Ref = region, X = x - s.X, Y = y - s.Y, Z = z - s.Z };
             var rot = off?.Element("rotation");
-            if (rot != null) { d.Yaw = (double?)rot.Attribute("yaw") ?? 0; d.Pitch = (double?)rot.Attribute("pitch") ?? 0; d.Roll = (double?)rot.Attribute("roll") ?? 0; }
+            if (rot != null) { d.Yaw = Num(rot.Attribute("yaw")) ?? 0; d.Pitch = Num(rot.Attribute("pitch")) ?? 0; d.Roll = Num(rot.Attribute("roll")) ?? 0; }
             else if (off?.Element("quaternion") is { } q)
-                d.Yaw = Math.Round(2 * Math.Atan2((double?)q.Attribute("qy") ?? 0, (double?)q.Attribute("qw") ?? 1) * 180 / Math.PI, 1);   // turn about "up" only
+                d.Yaw = Math.Round(2 * Math.Atan2(Num(q.Attribute("qy")) ?? 0, Num(q.Attribute("qw")) ?? 1) * 180 / Math.PI, 1);   // turn about "up" only
             sec.Decor.Add(d);
         }
 
